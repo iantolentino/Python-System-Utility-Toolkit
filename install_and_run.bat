@@ -15,9 +15,13 @@ echo ============================================
 echo  Master Script - Setup and Launch
 echo ============================================
 
-where python >nul 2>nul
+:: Note: "where python" is NOT enough to detect Python - fresh Windows installs ship a
+:: python.exe "App Execution Alias" stub under WindowsApps that's always on PATH, resolves
+:: fine via "where", but just prints a Microsoft Store redirect message and exits nonzero
+:: when actually run. Gate on "python --version" actually succeeding instead.
+python --version >nul 2>nul
 if errorlevel 1 (
-    echo Python not found. Installing Python via winget...
+    echo Python not found ^(or only the Microsoft Store shortcut is present^). Installing Python via winget...
     where winget >nul 2>nul
     if errorlevel 1 (
         echo [ERROR] winget is not available on this system.
@@ -26,14 +30,12 @@ if errorlevel 1 (
         exit /b 1
     )
 
-    winget install -e --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+    winget install -e --id Python.Python.3.12 --source winget --silent --accept-package-agreements --accept-source-agreements
     if errorlevel 1 (
-        echo [ERROR] Automatic Python installation failed. Please install Python manually.
-        pause
-        exit /b 1
+        echo [WARN] winget reported an issue installing Python - checking if it installed anyway...
     )
 
-    echo Python installed. Refreshing PATH for this session...
+    echo Refreshing PATH for this session...
     set "PYDIR="
     for /d %%d in ("%LocalAppData%\Programs\Python\Python3*") do set "PYDIR=%%d"
     if not defined PYDIR (
@@ -42,9 +44,9 @@ if errorlevel 1 (
     if defined PYDIR set "PATH=!PYDIR!;!PYDIR!\Scripts;%PATH%"
 )
 
-where python >nul 2>nul
+python --version >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] Python still not found on PATH after installation.
+    echo [ERROR] Python still not usable after installation attempt.
     echo Close this window, open a new terminal, and re-run install_and_run.bat.
     pause
     exit /b 1

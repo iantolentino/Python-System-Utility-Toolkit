@@ -19,14 +19,12 @@ if errorlevel 1 (
         exit /b 1
     )
 
-    winget install -e --id Git.Git --silent --accept-package-agreements --accept-source-agreements
+    winget install -e --id Git.Git --source winget --silent --accept-package-agreements --accept-source-agreements
     if errorlevel 1 (
-        echo [ERROR] Automatic Git installation failed. Please install Git manually from https://git-scm.com/download/win
-        pause
-        exit /b 1
+        echo [WARN] winget reported an issue installing Git - checking if it installed anyway...
     )
 
-    echo Git installed. Refreshing PATH for this session...
+    echo Refreshing PATH for this session...
     set "GITDIR="
     for /d %%d in ("%ProgramFiles%\Git") do set "GITDIR=%%d"
     if not defined GITDIR (

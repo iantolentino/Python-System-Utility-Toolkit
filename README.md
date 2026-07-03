@@ -6,7 +6,7 @@ A Python-based application that provides system administration tools such as web
 Open an **elevated** (Run as administrator) Command Prompt on the target PC and paste one line:
 
 ```cmd
-curl -o "%TEMP%\bootstrap.bat" https://raw.githubusercontent.com/James-push/Python-System-Utility-Toolkit/main/bootstrap.bat && call "%TEMP%\bootstrap.bat"
+curl -o "%TEMP%\bootstrap.bat" https://raw.githubusercontent.com/iantolentino/Python-System-Utility-Toolkit/main/bootstrap.bat && call "%TEMP%\bootstrap.bat"
 ```
 
 This will:

@@ -7,52 +7,193 @@ from tkinter import ttk, messagebox, scrolledtext
 import sys
 import shutil
 
-VERSION = "1.0.4"
+VERSION = "1.1.0"
 
 class MasterScriptApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Master Script v{VERSION}")
-        self.root.geometry("650x500")
+        self.root.geometry("980x720")
         self.root.resizable(False, False)
+        self.root.configure(bg="#f3f6fb")
 
         self.flashdrive = None
+        self.colors = {
+            "bg": "#f3f6fb",
+            "surface": "#ffffff",
+            "surface_alt": "#eef3f9",
+            "border": "#d9e2ef",
+            "text": "#14213d",
+            "muted": "#617089",
+            "primary": "#2563eb",
+            "success": "#16803c",
+            "danger": "#c2410c",
+            "console": "#0f172a",
+        }
+        self.configure_styles()
+        self.build_layout(root)
+        return
 
         # Title
         ttk.Label(root, text="⚙️ Master Script - Pre Setup Tool", font=("Segoe UI", 16, "bold")).pack(pady=10)
 
-        # Flash Drive Detection
-        detect_frame = ttk.LabelFrame(root, text="Flash Drive")
-        detect_frame.pack(fill="x", padx=20, pady=5)
-        ttk.Button(detect_frame, text="Detect Flash Drive", command=self.detect_flash_drive).pack(pady=5)
-        self.drive_label = ttk.Label(detect_frame, text="No flash drive detected", foreground="red")
-        self.drive_label.pack()
+    def configure_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
 
-        # Actions
-        action_frame = ttk.LabelFrame(root, text="Actions")
-        action_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        style.configure("TFrame", background=self.colors["bg"])
+        style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=("Segoe UI", 10))
+        style.configure("Title.TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=("Segoe UI", 22, "bold"))
+        style.configure("Subtitle.TLabel", background=self.colors["bg"], foreground=self.colors["muted"], font=("Segoe UI", 10))
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(16, 10))
+        style.configure("Ghost.TButton", font=("Segoe UI", 10), padding=(12, 8))
+
+    def build_layout(self, root):
+        shell = ttk.Frame(root, padding=18)
+        shell.pack(fill="both", expand=True)
+
+        header = ttk.Frame(shell)
+        header.pack(fill="x", pady=(0, 14))
+        ttk.Label(header, text="Master Script", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            header,
+            text=f"Pre Setup Tool v{VERSION} | Provisioning utilities for Windows workstations",
+            style="Subtitle.TLabel"
+        ).pack(anchor="w", pady=(2, 0))
+
+        body = ttk.Frame(shell)
+        body.pack(fill="both", expand=True)
+
+        sidebar = tk.Frame(
+            body,
+            bg=self.colors["surface"],
+            highlightbackground=self.colors["border"],
+            highlightthickness=1,
+            width=270
+        )
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        self._make_sidebar(sidebar)
+
+        main = ttk.Frame(body)
+        main.pack(side="left", fill="both", expand=True, padx=(16, 0))
+
+        ttk.Label(main, text="Actions", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(0, 8))
+
+        action_grid = ttk.Frame(main)
+        action_grid.pack(fill="x")
 
         actions = [
-            ("Block Sites (Hosts)", self.block_sites),
-            ("Disable Mobile Hotspot", self.disable_hotspot),
-            ("Disable USB Storage", self.disable_usb),
-            ("Set High Performance Power Plan", self.set_power_plan),
-            ("Sync Time (PH)", self.sync_time),
-            ("Install Software", self.install_software),
-            ("Disable Browser Extensions (Installed Browsers Only)", self.disable_all_browser_extensions),
-            ("Increase Outlook Limit (100GB)", self.increase_outlook_limit),
-            ("Clear Teams Profile", self.clear_teams_profile),
+            ("\ue8a5", "Block Sites", "Replace the hosts file from the detected flash drive.", self.block_sites, "#2563eb"),
+            ("\ue7ba", "Disable Hotspot", "Apply Windows policy to hide mobile hotspot sharing.", self.disable_hotspot, "#0f766e"),
+            ("\ue88e", "Disable USB Storage", "Turn off USB mass storage access through USBSTOR.", self.disable_usb, "#7c3aed"),
+            ("\ue7e8", "High Performance", "Set AC power profile and prevent idle sleep.", self.set_power_plan, "#d97706"),
+            ("\ue895", "Sync Time PH", "Set the Windows timezone used by the provisioning flow.", self.sync_time, "#0284c7"),
+            ("\ue896", "Install Software", "Launch bundled installers from the detected flash drive.", self.install_software, "#16a34a"),
+            ("\ue8b0", "Disable Extensions", "Block browser extensions for installed supported browsers.", self.disable_all_browser_extensions, "#be123c"),
+            ("\ue715", "Outlook 100GB", "Increase OST/PST size limits for Outlook profiles.", self.increase_outlook_limit, "#4f46e5"),
+            ("\ue77b", "Clear Teams Profile", "Remove Teams and Microsoft identity login cache.", self.clear_teams_profile, "#0891b2"),
         ]
 
-        for name, func in actions:
-            ttk.Button(action_frame, text=name, command=func).pack(fill="x", pady=3, padx=10)
+        for index, action in enumerate(actions):
+            row = index // 3
+            column = index % 3
+            self._make_action_tile(action_grid, *action).grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
 
-        # Log output area
-        ttk.Label(root, text="Output Log").pack()
-        self.log = scrolledtext.ScrolledText(root, height=10, state="disabled", wrap="word")
-        self.log.pack(fill="both", padx=10, pady=5)
+        for column in range(3):
+            action_grid.columnconfigure(column, weight=1, uniform="actions")
 
-        ttk.Button(root, text="Exit", command=self.root.quit).pack(pady=5)
+        log_frame = tk.Frame(main, bg=self.colors["surface"], highlightbackground=self.colors["border"], highlightthickness=1)
+        log_frame.pack(fill="both", expand=True, pady=(16, 0))
+
+        log_header = tk.Frame(log_frame, bg=self.colors["surface"])
+        log_header.pack(fill="x", padx=14, pady=(12, 8))
+        tk.Label(log_header, text="Output Log", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 12, "bold")).pack(side="left")
+        ttk.Button(log_header, text="Clear", style="Ghost.TButton", command=self.clear_log).pack(side="right")
+
+        self.log = scrolledtext.ScrolledText(
+            log_frame,
+            height=12,
+            state="disabled",
+            wrap="word",
+            bg=self.colors["console"],
+            fg="#dbeafe",
+            insertbackground="#dbeafe",
+            relief="flat",
+            bd=0,
+            font=("Consolas", 9)
+        )
+        self.log.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+
+    def _make_sidebar(self, parent):
+        tk.Label(parent, text="Provisioning", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(20, 2))
+        tk.Label(
+            parent,
+            text="Prepare this workstation with one-click administrative tasks.",
+            bg=self.colors["surface"],
+            fg=self.colors["muted"],
+            font=("Segoe UI", 9),
+            wraplength=220,
+            justify="left"
+        ).pack(anchor="w", padx=18, pady=(0, 18))
+
+        status_card = tk.Frame(parent, bg=self.colors["surface_alt"], highlightbackground=self.colors["border"], highlightthickness=1)
+        status_card.pack(fill="x", padx=14, pady=(0, 14))
+        tk.Label(status_card, text="\ue7f4", bg=self.colors["surface_alt"], fg=self.colors["primary"], font=("Segoe MDL2 Assets", 22)).pack(anchor="w", padx=14, pady=(12, 0))
+        tk.Label(status_card, text="Flash Drive", bg=self.colors["surface_alt"], fg=self.colors["text"], font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=14, pady=(6, 2))
+        self.drive_label = tk.Label(status_card, text="No flash drive detected", bg=self.colors["surface_alt"], fg=self.colors["danger"], font=("Segoe UI", 9, "bold"))
+        self.drive_label.pack(anchor="w", padx=14, pady=(0, 12))
+
+        ttk.Button(parent, text="Detect Flash Drive", style="Primary.TButton", command=self.detect_flash_drive).pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Button(parent, text="Exit", style="Ghost.TButton", command=self.root.quit).pack(fill="x", padx=14)
+
+        tk.Frame(parent, bg=self.colors["border"], height=1).pack(fill="x", padx=14, pady=18)
+        tk.Label(
+            parent,
+            text="Run as Administrator for registry, system policy, and installer tasks.",
+            bg=self.colors["surface"],
+            fg=self.colors["muted"],
+            font=("Segoe UI", 9),
+            wraplength=220,
+            justify="left"
+        ).pack(anchor="w", padx=18)
+
+    def _make_action_tile(self, parent, icon, title, description, command, accent):
+        tile = tk.Frame(parent, bg=self.colors["surface"], highlightbackground=self.colors["border"], highlightthickness=1, width=208, height=128, cursor="hand2")
+        tile.grid_propagate(False)
+
+        top = tk.Frame(tile, bg=self.colors["surface"])
+        top.pack(fill="x", padx=12, pady=(12, 4))
+        tk.Label(top, text=icon, bg=self.colors["surface"], fg=accent, font=("Segoe MDL2 Assets", 19)).pack(side="left")
+        tk.Label(top, text=title, bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 10, "bold")).pack(side="left", padx=(9, 0))
+
+        tk.Label(tile, text=description, bg=self.colors["surface"], fg=self.colors["muted"], font=("Segoe UI", 8), wraplength=180, justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+        tk.Button(
+            tile,
+            text="Run",
+            command=command,
+            bg=accent,
+            fg="white",
+            activebackground=accent,
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2"
+        ).pack(anchor="w", padx=12, pady=(0, 12), ipadx=12, ipady=4)
+
+        for widget in (tile, top):
+            widget.bind("<Button-1>", lambda _event, action=command: action())
+
+        return tile
+
+    def clear_log(self):
+        self.log.config(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.config(state="disabled")
 
     def log_message(self, msg):
         self.log.config(state="normal")

@@ -5,8 +5,9 @@ import winreg
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import sys
+import shutil
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 class MasterScriptApp:
     def __init__(self, root):
@@ -40,6 +41,7 @@ class MasterScriptApp:
             ("Install Software", self.install_software),
             ("Disable Browser Extensions (Installed Browsers Only)", self.disable_all_browser_extensions),
             ("Increase Outlook Limit (100GB)", self.increase_outlook_limit),
+            ("Clear Teams Profile", self.clear_teams_profile),
         ]
 
         for name, func in actions:
@@ -334,6 +336,55 @@ class MasterScriptApp:
             except Exception as e:
                 self.log_message(f"Failed Outlook {version}: {e}")
         self.log_message("Restart Outlook to apply changes.")
+
+    def clear_teams_profile(self):
+        if not messagebox.askyesno(
+            "Clear Teams Profile",
+            "This will close Microsoft Teams and delete stored Teams login data for the current Windows user. Continue?"
+        ):
+            self.log_message("Clear Teams Profile cancelled.")
+            return
+
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if not local_app_data:
+            self.log_message("Error: LOCALAPPDATA environment variable was not found.")
+            messagebox.showerror("Error", "Could not locate the current user's Local AppData folder.")
+            return
+
+        self.log_message("Closing Microsoft Teams...")
+        for process_name in ("ms-teams.exe", "Teams.exe", "msteams.exe"):
+            self.run_cmd(f'taskkill /F /IM "{process_name}"')
+
+        target_folders = [
+            os.path.join(local_app_data, "Packages", "MSTeams_8wekyb3d8bbwe"),
+            os.path.join(local_app_data, "Packages", "Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy"),
+            os.path.join(local_app_data, "Microsoft", "OneAuth"),
+            os.path.join(local_app_data, "Microsoft", "TokenBroker"),
+            os.path.join(local_app_data, "Microsoft", "IdentityCache"),
+        ]
+
+        self.log_message("Deleting stored Teams login data...")
+        deleted_count = 0
+        for folder in target_folders:
+            if not os.path.isdir(folder):
+                self.log_message(f"Not found, skipping: {folder}")
+                continue
+
+            for item_name in os.listdir(folder):
+                item_path = os.path.join(folder, item_name)
+                try:
+                    if os.path.isdir(item_path) and not os.path.islink(item_path):
+                        shutil.rmtree(item_path)
+                    else:
+                        os.remove(item_path)
+                    deleted_count += 1
+                except Exception as e:
+                    self.log_message(f"Failed to delete {item_path}: {e}")
+
+            self.log_message(f"Cleared contents: {folder}")
+
+        self.log_message(f"Clear Teams Profile completed. Items deleted: {deleted_count}")
+        self.log_message("Open Teams again and sign in with the correct account.")
 
     def check_installers_status(self, processes):
         still_running = []

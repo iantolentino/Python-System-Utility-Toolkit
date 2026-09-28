@@ -4,7 +4,7 @@ A Windows workstation setup application for IT. Run one CMD command to prepare t
 
 ## Start on a new PC
 
-Publish these changes to `iantolentino/Python-System-Utility-Toolkit` on `main` before using the remote command below. A downloaded bootstrap uses the files currently published on GitHub.
+The command downloads the current bootstrap from this repository's `main` branch.
 
 Open **Command Prompt as Administrator** and paste:
 
@@ -67,13 +67,7 @@ For a domain named `YOUR-PROJECT.vercel.app`, the short command is:
 curl.exe --fail --location --retry 2 -o "%TEMP%\setup.bat" https://YOUR-PROJECT.vercel.app/setup.bat && call "%TEMP%\setup.bat"
 ```
 
-Until the toolkit pull request is merged, the launcher downloads the reviewed setup branch with:
-
-```cmd
-curl.exe --fail --location --retry 2 -o "%TEMP%\bootstrap.bat" https://raw.githubusercontent.com/iantolentino/Python-System-Utility-Toolkit/codex/workstation-setup/bootstrap.bat && call "%TEMP%\bootstrap.bat" codex/workstation-setup
-```
-
-The branch argument is preserved through elevation and selects the same branch for the toolkit checkout and WinGet helper. After merging, update the launcher's `setup.bat` to use `main`.
+The launcher uses this repository's `main` branch for the bootstrap, toolkit checkout, and WinGet helper.
 
 ## Verification and rebuilding
 

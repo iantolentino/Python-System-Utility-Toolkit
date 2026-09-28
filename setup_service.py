@@ -19,7 +19,7 @@ CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Python-Sys
 
 def require_admin():
     if os.name != "nt" or not ctypes.windll.shell32.IsUserAnAdmin():
-        raise RuntimeError("Run install_and_run.bat as Administrator before setting up this workstation.")
+        raise RuntimeError("Run install_and_run.bat and accept its Windows administrator prompt before setting up this workstation.")
 
 
 def run_process(command, log, success_codes=(0,), timeout=1800):
@@ -117,9 +117,27 @@ def install_windows_app(log):
         raise RuntimeError("WinGet is unavailable. Install or update App Installer from Microsoft Store, then retry.")
     log("Installing Microsoft Windows App for the current Windows user...")
     log("WinGet will download and verify Windows App and its dependencies.")
-    run_process([winget, "install", "--id", "Microsoft.WindowsApp", "--exact", "--source", "winget",
-                 "--scope", "user", "--silent", "--disable-interactivity", "--accept-package-agreements",
-                 "--accept-source-agreements"], log, success_codes=(0, 0x8A15002B, -1978335189))
+    command = [winget, "install", "--id", "Microsoft.WindowsApp", "--exact", "--source", "winget",
+               "--scope", "user", "--silent", "--disable-interactivity", "--accept-package-agreements",
+               "--accept-source-agreements"]
+    source_missing = (0x8A15000F, -1978335217)
+    for attempt in range(1, 4):
+        log(f"Windows App installation - attempt {attempt}/3...")
+        result = run_process(command, log, success_codes=(0, 0x8A15002B, -1978335189, *source_missing))
+        if result.returncode not in source_missing:
+            break
+        if attempt == 3:
+            raise RuntimeError("WinGet source data is still missing after repair and 3 attempts. "
+                               "Update Microsoft App Installer, check network/policies, then use Retry Last Task.")
+        if attempt == 1:
+            log("WinGet source data is missing. Repairing the community source...")
+            for args in (("source", "reset", "--name", "winget", "--force", "--disable-interactivity"),
+                         ("source", "update", "--name", "winget", "--disable-interactivity")):
+                try:
+                    run_process([winget, *args], log, timeout=120)
+                except RuntimeError as exc:
+                    log(f"WARNING: Source repair: {exc}. Retrying installation anyway.")
+        time.sleep(3)
     log("SUCCESS: Microsoft Windows App installed or already current.")
 
 

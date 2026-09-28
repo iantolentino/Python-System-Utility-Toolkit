@@ -12,7 +12,11 @@ powershell.exe -NoProfile -Command "$p = [Security.Principal.WindowsPrincipal]::
 if errorlevel 1 (
     echo Requesting administrator privileges...
     powershell.exe -NoProfile -Command "try { $p = Start-Process -FilePath $env:TOOLKIT_BOOTSTRAP -ArgumentList $env:TOOLKIT_BOOTSTRAP_REF -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { Write-Error $_; exit 1 }"
-    exit /b
+    if errorlevel 1 (
+        echo [ERROR] Administrator approval or elevated setup failed. Review the error and rerun setup.
+        exit /b 1
+    )
+    exit /b 0
 )
 
 if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
@@ -22,23 +26,9 @@ sc.exe start w32time >nul 2>nul
 w32tm /resync /rediscover
 if errorlevel 1 echo [INFO] Time sync unavailable. If HTTPS downloads fail, correct Windows date/time and retry.
 
-where winget >nul 2>nul
-if errorlevel 1 (
-    echo Preparing Microsoft App Installer and WinGet...
-    curl.exe --fail --location --retry 2 -o "%TEMP%\toolkit-ensure-winget.ps1" https://raw.githubusercontent.com/iantolentino/Python-System-Utility-Toolkit/%REPO_BRANCH%/ensure-winget.ps1
-    if errorlevel 1 (
-        echo [ERROR] Could not download the WinGet setup helper. Check your connection and retry.
-        pause
-        exit /b 1
-    )
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\toolkit-ensure-winget.ps1"
-    if errorlevel 1 (
-        echo [ERROR] Could not install WinGet. See the output above.
-        pause
-        exit /b 1
-    )
-)
 set "PATH=%LOCALAPPDATA%\Microsoft\WindowsApps;%PATH%"
+if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" set "PATH=%ProgramFiles(x86)%\Git\cmd;%PATH%"
+if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%PATH%"
 
 echo ============================================
 echo  Master Script - Bootstrap
@@ -46,23 +36,25 @@ echo ============================================
 
 where git >nul 2>nul
 if errorlevel 1 (
-    echo Git not found. Installing Git via winget...
-    where winget >nul 2>nul
+    echo Preparing Git with WinGet repair and an official installer fallback...
+    curl.exe --fail --location --retry 2 -o "%TEMP%\toolkit-prerequisites.ps1" https://raw.githubusercontent.com/iantolentino/Python-System-Utility-Toolkit/%REPO_BRANCH%/setup-prerequisites.ps1
     if errorlevel 1 (
-        echo [ERROR] winget is not available on this system.
-        echo Install Git manually from https://git-scm.com/download/win and re-run this command.
+        echo [ERROR] Could not download the prerequisite helper. Check your connection and retry.
         pause
         exit /b 1
     )
-
-    call :install_git
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\toolkit-prerequisites.ps1" -Component Git
     if errorlevel 1 (
-        echo [WARN] winget reported an issue installing Git - checking if it installed anyway...
+        echo [ERROR] Git setup failed. Resolve the error above and rerun the curl command.
+        pause
+        exit /b 1
     )
 
     echo Refreshing PATH for this session...
 )
 if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" set "PATH=%ProgramFiles(x86)%\Git\cmd;%PATH%"
+if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%PATH%"
 
 where git >nul 2>nul
 if errorlevel 1 (
@@ -95,16 +87,6 @@ if errorlevel 1 (
 call "%DEST%\install_and_run.bat"
 exit /b %errorlevel%
 
-:install_git
-for /l %%a in (1,1,3) do (
-    echo Installing Git - attempt %%a/3...
-    winget install -e --id Git.Git --source winget --scope machine --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
-    if not errorlevel 1 exit /b 0
-    if exist "%ProgramFiles%\Git\cmd\git.exe" exit /b 0
-    if %%a LSS 3 timeout /t 3 /nobreak >nul
-)
-exit /b 1
-
 :fetch_repo
 for /l %%a in (1,1,3) do (
     echo Downloading toolkit - attempt %%a/3...
@@ -113,7 +95,7 @@ for /l %%a in (1,1,3) do (
     ) else (
         git clone --branch "%REPO_BRANCH%" "%REPO_URL%" "%DEST%"
     )
-    if not errorlevel 1 exit /b 0
+    if errorlevel 0 if not errorlevel 1 exit /b 0
     if %%a LSS 3 timeout /t 3 /nobreak >nul
 )
 exit /b 1

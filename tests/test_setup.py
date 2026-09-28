@@ -107,6 +107,20 @@ class SetupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "WinGet"):
                 setup.install_windows_app(Mock())
 
+    def test_windows_app_repairs_missing_source_and_retries(self):
+        missing = subprocess.CompletedProcess(["winget"], -1978335217, "source data missing", "")
+        success = subprocess.CompletedProcess(["winget"], 0, "", "")
+        with patch.object(setup.shutil, "which", return_value="winget"), patch.object(setup.time, "sleep"), patch.object(setup, "run_process", side_effect=[missing, success, success, success]) as run:
+            setup.install_windows_app(Mock())
+        self.assertEqual([call.args[0][1] for call in run.call_args_list], ["install", "source", "source", "install"])
+
+    def test_windows_app_missing_source_stops_after_three_attempts(self):
+        missing = subprocess.CompletedProcess(["winget"], -1978335217, "", "")
+        with patch.object(setup.shutil, "which", return_value="winget"), patch.object(setup.time, "sleep"), patch.object(setup, "run_process", return_value=missing) as run:
+            with self.assertRaisesRegex(RuntimeError, "3 attempts"):
+                setup.install_windows_app(Mock())
+        self.assertEqual(sum(call.args[0][1] == "install" for call in run.call_args_list), 3)
+
     def test_installer_failure_cannot_report_success(self):
         log = Mock()
         with patch.object(setup.subprocess, "run", return_value=subprocess.CompletedProcess(["installer"], 1, "", "failed")):

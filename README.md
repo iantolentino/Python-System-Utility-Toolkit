@@ -6,23 +6,24 @@ A Windows workstation setup application for IT. Run one CMD command to prepare t
 
 The command downloads the current bootstrap from this repository's `main` branch.
 
-Open **Command Prompt as Administrator** and paste:
+Open **Command Prompt** (normal or **Run as administrator**) and paste:
 
 ```cmd
 curl.exe --fail --location --retry 2 -o "%TEMP%\bootstrap.bat" https://raw.githubusercontent.com/iantolentino/Python-System-Utility-Toolkit/main/bootstrap.bat && call "%TEMP%\bootstrap.bat"
 ```
 
-Accept the Windows administrator prompt if shown. The bootstrap:
+Normal CMD automatically requests administrator approval. An administrator CMD continues directly. If you are signed in with a standard Windows account, enter authorized administrator credentials at the Windows prompt. Installation and system timezone/policy changes require that approval; cancelling it stops setup. The bootstrap:
 
-1. Installs Microsoft App Installer/WinGet and its dependencies if WinGet is absent, using Microsoft's release assets and SHA256 digests.
-2. Installs Git if absent and makes it available in the same CMD session.
-3. Clones this repository to `%USERPROFILE%\Python-System-Utility-Toolkit`, or updates an existing checkout with `git pull --ff-only`.
-4. Finds a working Python 3.10+ with Tkinter, or installs Python 3.12 for all users.
-5. Automatically opens the maximized application. No third-party Python dependencies are required.
+1. Checks Windows Time before prerequisite downloads.
+2. Finds Git, or tries WinGet three times with community source repair after the first failure. If WinGet is unavailable or still fails, downloads the official Git for Windows installer, verifies its signature (and release SHA256 when supplied), and installs it for all users. Git becomes available in the same CMD session.
+3. Clones this repository to `%USERPROFILE%\Python-System-Utility-Toolkit` in the elevated account, or updates an existing checkout with `git pull --ff-only`.
+4. Finds Python 3.10+ with Tkinter, or installs Python 3.12 for all users using the same WinGet repair/retry flow, followed by a signed installer from python.org if needed. Microsoft Store shortcuts are skipped.
+5. Prepares Microsoft App Installer/WinGet for Windows App if absent, using Microsoft's release assets and SHA256 digests. A failure here is shown but allows the GUI to open for Normal Setup and Front.
+6. Automatically opens the maximized application. No third-party Python dependencies are required.
 
 An internet connection and a supported Windows 10/11 installation are required. Windows application deployment must be permitted by the workstation's policies. A failed prerequisite stops the launch and leaves its error visible in CMD.
 
-For a local copy, double-click `install_and_run.bat`. Use this source launcher; the repository's existing `dist/master_gui.exe` predates these changes.
+For a local copy, double-click `install_and_run.bat` or run it from normal/admin CMD; it requests elevation when needed. Use this source launcher; the repository's existing `dist/master_gui.exe` predates these changes.
 
 ## Setup categories
 
@@ -53,7 +54,7 @@ Clock accuracy and timezone are checked separately. The application checks time 
 
 Use **Check / Sync Time** to check again. After a task fails, **Retry Last Task** becomes available. Fix the cause shown in the log and click it. The retry repeats the selected setup; previously verified release downloads are reused.
 
-Downloads retry transient failures up to three times with short delays. HTTPS certificate failures identify incorrect date/time as a possible cause; verification is never disabled. Git/Python prerequisite installation and repository downloads also retry up to three times. A busy Windows Installer is retried up to three times. Other installer errors are reported for IT to resolve before an explicit retry.
+Downloads retry transient failures up to three times with short delays. HTTPS certificate failures identify incorrect date/time as a possible cause; verification is never disabled. Git/Python WinGet attempts and repository downloads also retry up to three times. Missing WinGet source data (`0x8a15000f`) triggers community source reset/update and retries; Git/Python can fall back to vendor installers. Windows App also repairs that source error and retries up to three times, then reports a clear failure. A busy Windows Installer is retried up to three times. Other installer errors are reported for IT to resolve before an explicit retry.
 
 If the initial curl command fails with a certificate error before the bootstrap is downloaded, correct **Settings > Time & language > Date & time**, click **Sync now**, and paste the command again. For network failures, check internet access, proxy settings, and access to GitHub/Microsoft/Front download servers. A failed prerequisite leaves its error visible in CMD.
 
@@ -68,7 +69,7 @@ python -m unittest discover -s tests -v
 python -m py_compile master_gui.py setup_service.py installer_store.py clock_service.py
 ```
 
-Tests cover real Tkinter category switching, fullscreen controls, threaded log handling, failed actions, checksum verification, caching, malformed filenames, installer commands, restart codes, timezone verification, and partial installation failures. Tests mock installation and timezone changes to avoid provisioning the development PC.
+Tests cover real Tkinter category switching, fullscreen controls, threaded log handling, failed actions, checksum verification, caching, malformed filenames, installer commands, restart codes, timezone verification, and partial installation failures. Windows tests exercise the PowerShell prerequisite orchestration, including negative WinGet exit codes, source repair, bounded retries, missing WinGet, vendor fallbacks, and signature rejection. CMD tests exercise both launchers with simulated normal/admin privileges and cancelled elevation, including paths containing spaces. Tests mock installation, elevation, and timezone changes to avoid provisioning the development PC.
 
 To rebuild the optional executable in a Python environment with Tkinter:
 

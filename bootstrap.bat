@@ -64,13 +64,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+call :select_repo
+if errorlevel 1 (
+    echo [ERROR] Could not find an available toolkit folder. See the output above.
+    pause
+    exit /b 1
+)
+
 if exist "%DEST%\.git" (
-    git -C "%DEST%" remote get-url origin | findstr /i /x /c:"%REPO_URL%" /c:"https://github.com/iantolentino/Python-System-Utility-Toolkit" >nul
-    if errorlevel 1 (
-        echo [ERROR] This folder belongs to another repository. Rename "%DEST%" and retry.
-        pause
-        exit /b 1
-    )
     echo Repository already exists at "%DEST%" - pulling latest changes...
     call :fetch_repo
 ) else (
@@ -86,6 +87,28 @@ if errorlevel 1 (
 
 call "%DEST%\install_and_run.bat"
 exit /b %errorlevel%
+
+:select_repo
+set "DEST_BASE=%DEST%"
+set "DEST_NUMBER=0"
+:select_repo_check
+if not exist "%DEST%" exit /b 0
+if not exist "%DEST%\.git" goto :select_repo_next
+set "TOOLKIT_DEST=%DEST%"
+:: Git writes LF lines; FINDSTR /X can reject these even when the URL is correct.
+:: Trim and compare the whole URL in PowerShell, allowing HTTPS and SSH forms.
+powershell.exe -NoProfile -Command "$url = & git.exe -C $env:TOOLKIT_DEST remote get-url origin; if ($LASTEXITCODE -ne 0) { Write-Host '[WARN] Could not read the existing checkout; preserving that folder.'; exit 1 }; $url = ([string]$url).Trim().TrimEnd('/') -replace '\.git$', ''; $expected = 'github.com/iantolentino/Python-System-Utility-Toolkit'; if ($url -ieq ('https://' + $expected) -or $url -ieq ('git@github.com:' + $expected.Substring(11)) -or $url -ieq ('ssh://git@' + $expected)) { exit 0 }; Write-Host ('[INFO] Existing origin: ' + $url); exit 1"
+if errorlevel 0 if not errorlevel 1 exit /b 0
+:select_repo_next
+echo [INFO] Preserving existing folder "%DEST%". Checking another toolkit location...
+set /a DEST_NUMBER+=1 >nul
+if %DEST_NUMBER% GTR 100 (
+    echo [ERROR] Too many occupied toolkit folders under "%USERPROFILE%".
+    exit /b 1
+)
+set "DEST=%DEST_BASE%-iantolentino"
+if %DEST_NUMBER% GTR 1 set "DEST=%DEST_BASE%-iantolentino-%DEST_NUMBER%"
+goto :select_repo_check
 
 :fetch_repo
 for /l %%a in (1,1,3) do (

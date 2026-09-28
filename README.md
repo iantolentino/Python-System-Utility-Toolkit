@@ -16,7 +16,7 @@ Normal CMD automatically requests administrator approval. An administrator CMD c
 
 1. Checks Windows Time before prerequisite downloads.
 2. Finds Git, or tries WinGet three times with community source repair after the first failure. If WinGet is unavailable or still fails, downloads the official Git for Windows installer, verifies its signature (and release SHA256 when supplied), and installs it for all users. Git becomes available in the same CMD session.
-3. Clones this repository to `%USERPROFILE%\Python-System-Utility-Toolkit` in the elevated account, or updates an existing checkout with `git pull --ff-only`.
+3. Clones this repository to `%USERPROFILE%\Python-System-Utility-Toolkit` in the elevated account, or updates an existing checkout with `git pull --ff-only`. HTTPS and SSH origin URLs for this repository are recognized. If that folder contains another repository or ordinary files, setup preserves it and uses `Python-System-Utility-Toolkit-iantolentino` (then numbered alternatives when needed). The selected path is shown in CMD.
 4. Finds Python 3.10+ with Tkinter, or installs Python 3.12 for all users using the same WinGet repair/retry flow, followed by a signed installer from python.org if needed. Microsoft Store shortcuts are skipped.
 5. Prepares Microsoft App Installer/WinGet for Windows App if absent, using Microsoft's release assets and SHA256 digests. A failure here is shown but allows the GUI to open for Normal Setup and Front.
 6. Automatically opens the maximized application. No third-party Python dependencies are required.
@@ -69,7 +69,7 @@ python -m unittest discover -s tests -v
 python -m py_compile master_gui.py setup_service.py installer_store.py clock_service.py
 ```
 
-Tests cover real Tkinter category switching, fullscreen controls, threaded log handling, failed actions, checksum verification, caching, malformed filenames, installer commands, restart codes, timezone verification, and partial installation failures. Windows tests exercise the PowerShell prerequisite orchestration, including negative WinGet exit codes, source repair, bounded retries, missing WinGet, vendor fallbacks, and signature rejection. CMD tests exercise both launchers with simulated normal/admin privileges and cancelled elevation, including paths containing spaces. Tests mock installation, elevation, and timezone changes to avoid provisioning the development PC.
+Tests cover real Tkinter category switching, fullscreen controls, threaded log handling, failed actions, checksum verification, caching, malformed filenames, installer commands, restart codes, timezone verification, and partial installation failures. Windows tests exercise the PowerShell prerequisite orchestration, including negative WinGet exit codes, source repair, bounded retries, missing WinGet, vendor fallbacks, and signature rejection. CMD tests exercise both launchers with simulated normal/admin privileges and cancelled elevation, including paths containing spaces. Repository selection tests use real local Git repositories to verify URL recognition, Git's line endings, and preservation of occupied folders. Tests mock installation, elevation, and timezone changes to avoid provisioning the development PC.
 
 To rebuild the optional executable in a Python environment with Tkinter:
 

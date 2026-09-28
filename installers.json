@@ -1,0 +1,54 @@
+{
+  "repository": "eazyboytt/Python-System-Utility-Toolkit",
+  "release_tag": "installers-v1",
+  "installers": [
+    {
+      "name": "OBS Studio",
+      "asset": "obs.exe",
+      "silent_args": "/S",
+      "sha256": "bbb95e52b96ad9b7ccd5abd13121379d29774d6cc5fdbef82ffa249e8a24a289"
+    },
+    {
+      "name": "AnyDesk",
+      "asset": "anydesk.exe",
+      "silent_args": null,
+      "sha256": "5bf2945ceaaac681fad1b9b999c6620ce8393f919179ce6ca0fef5b411e984e5"
+    },
+    {
+      "name": "TeamLogger",
+      "asset": "teamlogger.msi",
+      "silent_args": "/quiet /qn",
+      "sha256": "3fdbf6caf580ca3a3b309ee2cece1dc7888b1c8e8d190314bc23741449bfc047"
+    },
+    {
+      "name": "Zoom",
+      "asset": "zoom.exe",
+      "silent_args": "/quiet",
+      "sha256": "bdec23ccd708cc70f71863a2b1a6e962a2eb4d378ab7a0cbe828aafbf88fe458"
+    },
+    {
+      "name": "Microsoft Teams",
+      "asset": "teams.exe",
+      "silent_args": "/s",
+      "sha256": "e0b0a89c449acdb6ac9eb181dbf1be6ca0824ea215429ddcc927703086a0e608"
+    },
+    {
+      "name": "WinRAR",
+      "asset": "winrar.exe",
+      "silent_args": "/S",
+      "sha256": "f435b24d4c2c5342c4f7c0143ef358f0f425b7b8a0972dd34d9dcf94789e9c4d"
+    },
+    {
+      "name": "Microsoft Office",
+      "asset": "office.exe",
+      "silent_args": null,
+      "sha256": "dcdd33eef1aa9ded7b78799f6dec8d0a093451b5a01e02a61ccb36750c98006f"
+    },
+    {
+      "name": "RustDesk",
+      "asset": "rustdesk.exe",
+      "silent_args": "--silent-install",
+      "sha256": "422ce31131e6537ea4f611ebf4a4d1804f28a6f58c83aa05065071c5958f1551"
+    }
+  ]
+}

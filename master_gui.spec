@@ -5,7 +5,7 @@ a = Analysis(
     ['master_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('installers.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

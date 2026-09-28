@@ -6,18 +6,37 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import sys
 import shutil
+import queue
+import threading
+import time
+from datetime import datetime
+from setup_service import install_normal, install_cng, set_sydney_timezone
+from clock_service import check_system_time
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 class MasterScriptApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Master Script v{VERSION}")
-        self.root.geometry("980x720")
-        self.root.resizable(False, False)
+        self.root.geometry("1280x900")
+        self.root.minsize(980, 720)
+        self.root.resizable(True, True)
+        self.root.state("zoomed")
+        self.root.bind("<F11>", self.toggle_fullscreen)
+        self.root.bind("<Escape>", lambda event: self.root.attributes("-fullscreen", False))
         self.root.configure(bg="#f3f6fb")
 
         self.flashdrive = None
+        self.category = "Normal Setup"
+        self.events = queue.Queue()
+        self.busy = False
+        self.job_failed = False
+        self.job_started = 0
+        self.job_name = "Ready"
+        self.current_step = "Ready"
+        self.last_job = None
+        self.track_log_errors = False
         self.colors = {
             "bg": "#f3f6fb",
             "surface": "#ffffff",
@@ -32,10 +51,9 @@ class MasterScriptApp:
         }
         self.configure_styles()
         self.build_layout(root)
-        return
-
-        # Title
-        ttk.Label(root, text="⚙️ Master Script - Pre Setup Tool", font=("Segoe UI", 16, "bold")).pack(pady=10)
+        self.root.after(100, self.process_events)
+        self.log_message("Ready. Choose Normal Setup or CNG Setup. F11: full screen; Esc: exit full screen.")
+        self.root.after(250, lambda: self.start_job("Clock check", check_system_time))
 
     def configure_styles(self):
         style = ttk.Style()
@@ -81,10 +99,20 @@ class MasterScriptApp:
         main = ttk.Frame(body)
         main.pack(side="left", fill="both", expand=True, padx=(16, 0))
 
-        ttk.Label(main, text="Actions", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(0, 8))
+        categories = ttk.Frame(main)
+        categories.pack(fill="x", pady=(0, 8))
+        ttk.Button(categories, text="Category 1: Normal Setup", style="Primary.TButton",
+            command=lambda: self.select_category("Normal Setup")).pack(side="left", padx=(0, 8))
+        ttk.Button(categories, text="Category 2: CNG Setup", style="Primary.TButton",
+                   command=lambda: self.select_category("CNG Setup")).pack(side="left")
+        self.category_label = ttk.Label(main, text="Normal Setup", font=("Segoe UI", 14, "bold"))
+        self.category_label.pack(anchor="w", pady=(0, 4))
+        self.category_note = ttk.Label(main, text="Install the general apps from the installers-v1 release.", style="Subtitle.TLabel")
+        self.category_note.pack(anchor="w", pady=(0, 8))
 
         action_grid = ttk.Frame(main)
         action_grid.pack(fill="x")
+        self.action_grid = action_grid
 
         actions = [
             ("\ue8a5", "Block Sites", "Replace the hosts file from the detected flash drive.", self.block_sites, "#2563eb"),
@@ -92,16 +120,14 @@ class MasterScriptApp:
             ("\ue88e", "Disable USB Storage", "Turn off USB mass storage access through USBSTOR.", self.disable_usb, "#7c3aed"),
             ("\ue7e8", "High Performance", "Set AC power profile and prevent idle sleep.", self.set_power_plan, "#d97706"),
             ("\ue895", "Sync Time PH", "Set the Windows timezone used by the provisioning flow.", self.sync_time, "#0284c7"),
-            ("\ue896", "Install Software", "Launch bundled installers from the detected flash drive.", self.install_software, "#16a34a"),
+            ("\ue896", "Install Normal Apps", "Download, verify and install the general app packages.", self.install_software, "#16a34a"),
             ("\ue8b0", "Disable Extensions", "Block browser extensions for installed supported browsers.", self.disable_all_browser_extensions, "#be123c"),
             ("\ue715", "Outlook 100GB", "Increase OST/PST size limits for Outlook profiles.", self.increase_outlook_limit, "#4f46e5"),
             ("\ue77b", "Clear Teams Profile", "Remove Teams and Microsoft identity login cache.", self.clear_teams_profile, "#0891b2"),
         ]
 
-        for index, action in enumerate(actions):
-            row = index // 3
-            column = index % 3
-            self._make_action_tile(action_grid, *action).grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
+        self.normal_actions = actions
+        self.render_actions(actions)
 
         for column in range(3):
             action_grid.columnconfigure(column, weight=1, uniform="actions")
@@ -113,6 +139,13 @@ class MasterScriptApp:
         log_header.pack(fill="x", padx=14, pady=(12, 8))
         tk.Label(log_header, text="Output Log", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 12, "bold")).pack(side="left")
         ttk.Button(log_header, text="Clear", style="Ghost.TButton", command=self.clear_log).pack(side="right")
+        ttk.Button(log_header, text="Full Screen (F11)", style="Ghost.TButton", command=self.toggle_fullscreen).pack(side="right", padx=8)
+        self.status = tk.StringVar(value="Ready")
+        self.status_label = tk.Label(log_frame, textvariable=self.status, bg=self.colors["surface"],
+                                    fg=self.colors["primary"], font=("Segoe UI", 10, "bold"), anchor="w")
+        self.status_label.pack(fill="x", padx=14, pady=(0, 8))
+        self.progress = ttk.Progressbar(log_frame, mode="indeterminate")
+        self.progress.pack(fill="x", padx=14, pady=(0, 8))
 
         self.log = scrolledtext.ScrolledText(
             log_frame,
@@ -124,9 +157,101 @@ class MasterScriptApp:
             insertbackground="#dbeafe",
             relief="flat",
             bd=0,
-            font=("Consolas", 9)
+            font=("Consolas", 11)
         )
         self.log.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self.log.tag_configure("error", foreground="#fca5a5")
+        self.log.tag_configure("success", foreground="#86efac")
+        self.log.tag_configure("info", foreground="#dbeafe")
+
+    def toggle_fullscreen(self, event=None):
+        self.root.attributes("-fullscreen", not self.root.attributes("-fullscreen"))
+
+    def render_actions(self, actions):
+        for child in self.action_grid.winfo_children():
+            child.destroy()
+        for index, action in enumerate(actions):
+            self._make_action_tile(self.action_grid, *action).grid(row=index // 3, column=index % 3,
+                                                                  sticky="nsew", padx=6, pady=6)
+
+    def select_category(self, category):
+        if self.busy:
+            self.log_message("A task is running. Wait for it to finish before changing setup category.")
+            return
+        self.category = category
+        self.category_label.config(text=category)
+        self.log_message(f"Selected {category}.")
+        if category == "Normal Setup":
+            self.category_note.config(text="Install the general apps from the installers-v1 release.")
+            self.render_actions(self.normal_actions)
+        else:
+            self.category_note.config(text="Sydney timezone is applied on selection. Install Front and Microsoft Windows App below.")
+            self.render_actions([
+                ("\ue896", "Install CNG Apps", "Install both Front and Microsoft Windows App.", lambda: self.start_job("CNG Setup", install_cng), "#16a34a"),
+                ("\ue715", "Front", "Install Front desktop for all Windows users.", lambda: self.start_job("Front", lambda log: install_cng(log, ("Front",))), "#2563eb"),
+                ("\ue7f4", "Windows App", "Install Microsoft's Windows App for this user.", lambda: self.start_job("Windows App", lambda log: install_cng(log, ("Windows App",))), "#7c3aed"),
+            ])
+            def prepare_timezone(log):
+                check_system_time(log)
+                set_sydney_timezone(log)
+            self.start_job("Sydney timezone", prepare_timezone)
+
+    def start_job(self, name, operation, track_log_errors=False):
+        if self.busy:
+            self.log_message("A task is already running. Wait for its result before starting another.")
+            return
+        self.busy = True
+        self.last_job = (name, operation, track_log_errors)
+        self.track_log_errors = track_log_errors
+        self.retry_button.config(state="disabled")
+        self.job_failed = False
+        self.job_name = name
+        self.current_step = name
+        self.job_started = time.monotonic()
+        self.status.set(f"Working: {name}")
+        self.progress.start(12)
+        self.log_message(f"START: {name}")
+
+        def work():
+            success = False
+            try:
+                operation(lambda message: self.events.put(("log", message)))
+                success = True
+            except Exception as exc:
+                self.events.put(("log", f"ERROR: {name}: {exc}"))
+            finally:
+                self.events.put(("done", success))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def process_events(self):
+        try:
+            while True:
+                kind, value = self.events.get_nowait()
+                if kind == "log":
+                    if self.track_log_errors and ("ERROR" in value or "Failed" in value or "failed" in value or value.startswith("Error")):
+                        self.job_failed = True
+                    self.log_message(value)
+                else:
+                    self.busy = False
+                    self.progress.stop()
+                    elapsed = int(time.monotonic() - self.job_started)
+                    value = value and not self.job_failed
+                    self.retry_button.config(state="disabled" if value else "normal")
+                    result = "Completed" if value else "Failed - see log"
+                    self.status.set(f"{self.job_name}: {result} ({elapsed}s)")
+                    self.log_message(f"{'SUCCESS' if value else 'ERROR'}: {self.job_name} finished after {elapsed}s.")
+        except queue.Empty:
+            pass
+        if self.busy:
+            self.status.set(f"{self.current_step} | {int(time.monotonic() - self.job_started)}s elapsed")
+        self.root.after(100, self.process_events)
+
+    def retry_last_task(self):
+        if not self.busy and self.last_job:
+            name, operation, track_log_errors = self.last_job
+            self.log_message(f"Retry requested: {name}")
+            self.start_job(name, operation, track_log_errors)
 
     def _make_sidebar(self, parent):
         tk.Label(parent, text="Provisioning", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(20, 2))
@@ -147,7 +272,10 @@ class MasterScriptApp:
         self.drive_label = tk.Label(status_card, text="No flash drive detected", bg=self.colors["surface_alt"], fg=self.colors["danger"], font=("Segoe UI", 9, "bold"))
         self.drive_label.pack(anchor="w", padx=14, pady=(0, 12))
 
-        ttk.Button(parent, text="Detect Flash Drive", style="Primary.TButton", command=self.detect_flash_drive).pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Button(parent, text="Check / Sync Time", style="Primary.TButton", command=lambda: self.start_job("Clock check", check_system_time)).pack(fill="x", padx=14, pady=(0, 10))
+        self.retry_button = ttk.Button(parent, text="Retry Last Task", style="Primary.TButton", command=self.retry_last_task, state="disabled")
+        self.retry_button.pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Button(parent, text="Detect Flash Drive", style="Ghost.TButton", command=self.detect_flash_drive).pack(fill="x", padx=14, pady=(0, 10))
         ttk.Button(parent, text="Exit", style="Ghost.TButton", command=self.root.quit).pack(fill="x", padx=14)
 
         tk.Frame(parent, bg=self.colors["border"], height=1).pack(fill="x", padx=14, pady=18)
@@ -162,6 +290,8 @@ class MasterScriptApp:
         ).pack(anchor="w", padx=18)
 
     def _make_action_tile(self, parent, icon, title, description, command, accent):
+        action = command
+        command = lambda: self.invoke_action(title, action)
         tile = tk.Frame(parent, bg=self.colors["surface"], highlightbackground=self.colors["border"], highlightthickness=1, width=208, height=128, cursor="hand2")
         tile.grid_propagate(False)
 
@@ -170,7 +300,9 @@ class MasterScriptApp:
         tk.Label(top, text=icon, bg=self.colors["surface"], fg=accent, font=("Segoe MDL2 Assets", 19)).pack(side="left")
         tk.Label(top, text=title, bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 10, "bold")).pack(side="left", padx=(9, 0))
 
-        tk.Label(tile, text=description, bg=self.colors["surface"], fg=self.colors["muted"], font=("Segoe UI", 8), wraplength=180, justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+        description_label = tk.Label(tile, text=description, bg=self.colors["surface"], fg=self.colors["muted"], font=("Segoe UI", 9), wraplength=180, justify="left")
+        description_label.pack(fill="x", anchor="w", padx=12, pady=(0, 8))
+        tile.bind("<Configure>", lambda event: description_label.config(wraplength=max(150, event.width - 24)))
         tk.Button(
             tile,
             text="Run",
@@ -190,15 +322,41 @@ class MasterScriptApp:
 
         return tile
 
+    def invoke_action(self, title, action):
+        if self.busy:
+            self.log_message("A task is running. Wait for it to finish before starting another action.")
+            return
+        if title in ("Disable Hotspot", "Disable USB Storage", "High Performance", "Sync Time PH", "Disable Extensions", "Outlook 100GB"):
+            self.start_job(title, lambda log: action(), track_log_errors=True)
+            return
+        self.log_message(f"START: {title}")
+        self.status.set(f"Working: {title}")
+        self.root.update_idletasks()
+        try:
+            action()
+        except Exception as exc:
+            self.log_message(f"ERROR: {title}: {exc}")
+        finally:
+            if not self.busy:
+                self.status.set(f"{title}: finished - see log for the result")
+
     def clear_log(self):
         self.log.config(state="normal")
         self.log.delete("1.0", "end")
         self.log.config(state="disabled")
 
     def log_message(self, msg):
+        if threading.current_thread() is not threading.main_thread():
+            self.events.put(("log", msg))
+            return
         self.log.config(state="normal")
-        self.log.insert("end", msg + "\n")
+        tag = "error" if "ERROR" in msg or "Failed" in msg else "success" if "SUCCESS" in msg or "successfully" in msg else "info"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        for line in str(msg).splitlines():
+            self.log.insert("end", f"[{timestamp}] {line}\n", tag)
         self.log.see("end")
+        if self.busy and str(msg).splitlines():
+            self.current_step = str(msg).splitlines()[-1][:110]
         self.log.config(state="disabled")
 
     def detect_flash_drive(self):
@@ -222,14 +380,20 @@ class MasterScriptApp:
         return True
 
     def run_cmd(self, cmd):
+        self.log_message(f"Running: {cmd}")
         try:
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.stdout:
                 self.log_message(result.stdout.strip())
             if result.stderr:
                 self.log_message(result.stderr.strip())
+            if result.returncode != 0:
+                self.log_message(f"ERROR: Command failed with exit code {result.returncode}.")
+                return False
+            return True
         except Exception as e:
-            self.log_message(str(e))
+            self.log_message(f"ERROR: {e}")
+            return False
 
     import subprocess
 
@@ -250,15 +414,15 @@ class MasterScriptApp:
         src = os.path.join(self.flashdrive, "hosts")
         dest = r"C:\Windows\System32\drivers\etc\hosts"
         self.log_message("Blocking sites...")
-        self.run_cmd(f'copy /Y "{src}" "{dest}"')
-        self.log_message("Sites blocked successfully.")
+        if self.run_cmd(f'copy /Y "{src}" "{dest}"'):
+            self.log_message("Sites blocked successfully.")
 
     def disable_hotspot(self):
         try:
             key_path = r"SOFTWARE\Policies\Microsoft\Windows\Network Connections"
             with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-                winreg.SetValueEx(key, "NC_ShowSharedAccessUI", 0, winreg.REG_DWORD, 1)
-            self.log_message("Mobile hotspot disabled successfully.")
+                winreg.SetValueEx(key, "NC_ShowSharedAccessUI", 0, winreg.REG_DWORD, 0)
+            self.log_message("Internet Connection Sharing prohibition applied successfully. Restart Windows to apply the policy.")
         except Exception as e:
             self.log_message(f"Failed to disable hotspot: {e}")
 
@@ -306,26 +470,18 @@ class MasterScriptApp:
                     self.log_message(f"{name} not installed — skipping.")
                     continue
                 try:
-                    with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, info["path"]) as key:
-                        winreg.SetValueEx(key, "ExtensionInstallBlocklist", 0, winreg.REG_MULTI_SZ, ["*"])
+                    with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, info["path"] + r"\ExtensionInstallBlocklist") as key:
+                        winreg.SetValueEx(key, "1", 0, winreg.REG_SZ, "*")
                     self.log_message(f"{name}: Extensions disabled successfully.")
                 except Exception as e:
                     self.log_message(f"Failed to apply policy for {name}: {e}")
 
             # Handle Firefox
             if browser_exists(browsers["Firefox"]["exe"]):
-                firefox_policy_path = r"C:\Program Files\Mozilla Firefox\distribution\policies.json"
-                os.makedirs(os.path.dirname(firefox_policy_path), exist_ok=True)
-                firefox_policy = {
-                    "policies": {
-                        "Extensions": {
-                            "Install": False
-                        }
-                    }
-                }
                 import json
-                with open(firefox_policy_path, "w") as f:
-                    json.dump(firefox_policy, f, indent=4)
+                policy = json.dumps({"*": {"installation_mode": "blocked"}})
+                with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Mozilla\Firefox") as key:
+                    winreg.SetValueEx(key, "ExtensionSettings", 0, winreg.REG_MULTI_SZ, [policy])
                 self.log_message("Firefox: Extensions disabled successfully.")
             else:
                 self.log_message("Firefox not installed — skipping.")
@@ -350,117 +506,17 @@ class MasterScriptApp:
 
     def set_power_plan(self):
         self.log_message("Setting High Performance power plan...")
-        self.run_cmd("powercfg /setactive SCHEME_MIN")
-        self.run_cmd("powercfg /change monitor-timeout-ac 0")
-        self.run_cmd("powercfg /change standby-timeout-ac 0")
-        self.log_message("Power plan set successfully.")
+        results = [self.run_cmd(command) for command in ("powercfg /setactive SCHEME_MIN", "powercfg /change monitor-timeout-ac 0", "powercfg /change standby-timeout-ac 0")]
+        if all(results):
+            self.log_message("Power plan set successfully.")
 
     def sync_time(self):
         self.log_message("Syncing timezone to PH...")
-        self.run_cmd('tzutil /s "Taipei Standard Time"')
-        self.log_message("Timezone synced.")
+        if self.run_cmd('tzutil /s "Taipei Standard Time"'):
+            self.log_message("Timezone synced.")
 
     def install_software(self):
-        if not self.require_flashdrive():
-            return
-
-        import shutil
-        import tempfile
-
-        self.log_message("Installing software automatically...")
-
-        installers = {
-            "OBS Studio": (os.path.join(self.flashdrive, "installers", "obs.exe"), "/S"),
-            "AnyDesk": (os.path.join(self.flashdrive, "installers", "anydesk.exe"), None),  # special handling
-            "TeamLogger": (os.path.join(self.flashdrive, "installers", "teamlogger.msi"), "/quiet /qn"),
-            "Zoom": (os.path.join(self.flashdrive, "installers", "zoom.exe"), "/quiet"),
-            "Microsoft Teams": (os.path.join(self.flashdrive, "installers", "teams.exe"), "/s"),
-            "WinRAR": (os.path.join(self.flashdrive, "installers", "winrar.exe"), "/S"),
-            "Jabra Direct": (os.path.join(self.flashdrive, "installers", "jabra.exe"), "/quiet"),  
-        }
-
-        processes = []
-
-        for name, (path, args) in installers.items():
-            if not os.path.exists(path):
-                self.log_message(f"{name} installer not found at: {path}")
-                continue
-
-            self.log_message(f"Launching {name} installation...")
-
-            try:
-                # 🔹 Special handling for AnyDesk
-                if name == "AnyDesk":
-                    install_dir = r"C:\Program Files (x86)\AnyDesk"
-                    cmd = f'"{path}" --install "{install_dir}" --silent --create-shortcuts --start-with-win'
-                    p = subprocess.Popen(cmd, shell=True)
-
-                # 🔹 Fix for Zoom (EXE, needs copy to temp + proper elevation)
-                elif name == "Zoom":
-                    temp_zoom_path = os.path.join(tempfile.gettempdir(), "zoom_installer.exe")
-                    shutil.copy2(path, temp_zoom_path)
-                    cmd = [
-                        "powershell",
-                        "-Command",
-                        f'Start-Process -FilePath "{temp_zoom_path}" -ArgumentList \'/quiet\' -Verb RunAs'
-                    ]
-                    p = subprocess.Popen(cmd, shell=True)
-
-                # 🔹 Fix for TeamLogger (MSI, needs admin and msiexec)
-                elif name == "TeamLogger":
-                    temp_team_path = os.path.join(tempfile.gettempdir(), "teamlogger.msi")
-                    shutil.copy2(path, temp_team_path)
-                    cmd = [
-                        "powershell",
-                        "-Command",
-                        f'Start-Process -FilePath "msiexec.exe" -ArgumentList \'/i "{temp_team_path}" /quiet /qn\' -Verb RunAs'
-                    ]
-                    p = subprocess.Popen(cmd, shell=True)
-                
-                elif name == "Jabra Direct":
-                    temp_jabra_path = os.path.join(tempfile.gettempdir(), "jabradirect_installer.exe")
-                    shutil.copy2(path, temp_jabra_path)
-                    cmd = [
-                        "powershell",
-                        "-Command",
-                        f'Start-Process -FilePath "{temp_jabra_path}" -ArgumentList \'/quiet\' -Verb RunAs'
-                    ]
-                    p = subprocess.Popen(cmd, shell=True)
-
-
-                # 🔹 Normal EXE installers
-                elif path.endswith(".exe"):
-                    cmd = [
-                        "powershell",
-                        "-Command",
-                        f'Start-Process -FilePath "{path}" -ArgumentList \'{args}\' -Verb RunAs'
-                    ]
-                    p = subprocess.Popen(cmd, shell=True)
-
-                # 🔹 MSI installers
-                elif path.endswith(".msi"):
-                    cmd = [
-                        "powershell",
-                        "-Command",
-                        f'Start-Process -FilePath "msiexec.exe" -ArgumentList \'/i "{path}" {args}\' -Verb RunAs'
-                    ]
-                    p = subprocess.Popen(cmd, shell=True)
-
-                else:
-                    self.log_message(f"Unknown installer type for {name}, skipping.")
-                    continue
-
-                processes.append((name, p))
-
-            except Exception as e:
-                self.log_message(f"Error launching {name}: {e}")
-
-        self.log_message("All installers have been launched in the background. You can continue using this tool.")
-
-        # Optional: Monitor background installs
-        self.root.after(5000, lambda: self.check_installers_status(processes))
-
-
+        self.start_job("Normal Setup", install_normal)
 
     def increase_outlook_limit(self):
         self.log_message("Increasing Outlook OST/PST limit to 100GB...")
@@ -526,24 +582,6 @@ class MasterScriptApp:
 
         self.log_message(f"Clear Teams Profile completed. Items deleted: {deleted_count}")
         self.log_message("Open Teams again and sign in with the correct account.")
-
-    def check_installers_status(self, processes):
-        still_running = []
-        for name, p in processes:
-            ret = p.poll()
-            if ret is None:
-                still_running.append((name, p))
-            else:
-                if ret == 0:
-                    self.log_message(f"{name} finished successfully.")
-                else:
-                    self.log_message(f"{name} exited with code {ret}.")
-
-        if still_running:
-            self.root.after(5000, lambda: self.check_installers_status(still_running))
-        else:
-            self.log_message("✅ All background installations completed.")
-
 
 
 if __name__ == "__main__":

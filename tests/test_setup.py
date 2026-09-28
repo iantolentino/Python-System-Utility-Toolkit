@@ -61,6 +61,8 @@ class InstallerTests(unittest.TestCase):
 
     def test_real_catalog_has_all_eight_pinned_release_assets(self):
         catalog = installer_store.load_catalog(setup.RESOURCE_DIR / "installers.json")
+        self.assertEqual(catalog["repository"], "iantolentino/Python-System-Utility-Toolkit")
+        self.assertEqual(catalog["release_tag"], "installers-v1")
         self.assertEqual(len(catalog["installers"]), 8)
         self.assertTrue(all(len(entry["sha256"]) == 64 for entry in catalog["installers"]))
 

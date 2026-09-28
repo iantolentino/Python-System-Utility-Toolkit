@@ -57,17 +57,9 @@ Downloads retry transient failures up to three times with short delays. HTTPS ce
 
 If the initial curl command fails with a certificate error before the bootstrap is downloaded, correct **Settings > Time & language > Date & time**, click **Sync now**, and paste the command again. For network failures, check internet access, proxy settings, and access to GitHub/Microsoft/Front download servers. A failed prerequisite leaves its error visible in CMD.
 
-## Short URL launcher
+## Copy-command webpage
 
-The separate [pc-setup-launcher repository](https://github.com/iantolentino/pc-setup-launcher) contains a static Vercel page and `/setup.bat` endpoint. After you deploy it, open the page and click **Copy CMD command**. The page fills in its actual deployed domain automatically.
-
-For a domain named `YOUR-PROJECT.vercel.app`, the short command is:
-
-```cmd
-curl.exe --fail --location --retry 2 -o "%TEMP%\setup.bat" https://YOUR-PROJECT.vercel.app/setup.bat && call "%TEMP%\setup.bat"
-```
-
-The launcher uses this repository's `main` branch for the bootstrap, toolkit checkout, and WinGet helper.
+The separate [pc-setup-launcher repository](https://github.com/iantolentino/pc-setup-launcher) contains a single `index.html` page ready for Vercel. After deploying it, open the page and click **Copy CMD command**. It copies the exact quick-start command above, which downloads the bootstrap directly from this repository's `main` branch.
 
 ## Verification and rebuilding
 

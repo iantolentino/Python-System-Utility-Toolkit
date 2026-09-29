@@ -9,6 +9,7 @@ import ssl
 import time
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -34,7 +35,11 @@ def _release_base(catalog: dict) -> str:
 
 
 def _download_once(url: str, destination: Path, log=lambda message: None) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "Python-System-Utility-Toolkit"})
+    headers = {"User-Agent": "Python-System-Utility-Toolkit"}
+    # AMD's download server requires requests to originate from its support page.
+    if urllib.parse.urlparse(url).hostname == "drivers.amd.com":
+        headers["Referer"] = "https://www.amd.com/en/support/download/drivers.html"
+    request = urllib.request.Request(url, headers=headers)
     temporary = destination.with_suffix(destination.suffix + ".part")
     try:
         with urllib.request.urlopen(request, timeout=120) as response, open(temporary, "wb") as output:

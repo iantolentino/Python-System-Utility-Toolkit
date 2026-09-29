@@ -32,7 +32,7 @@ For a local copy, double-click `install_and_run.bat` or run it from normal/admin
 | Normal Setup | OBS Studio, AnyDesk, TeamLogger, Zoom, Microsoft Teams, WinRAR, Microsoft Office, RustDesk | No automatic timezone change; the existing Sync Time PH action remains available. |
 | CNG Setup | Front desktop from [front.com](https://front.com/), Microsoft Windows App | Selecting CNG applies and verifies Sydney's `AUS Eastern Standard Time`, including daylight saving. |
 
-Choose **Install Normal Apps** to prepare and run the general installers. Files come from this repository's [installers-v1 release](https://github.com/iantolentino/Python-System-Utility-Toolkit/releases/tag/installers-v1); `installers.json` identifies the assets and pins each file's SHA256. The bundle is copied from the supplied source release with identical filenames and checksums. Verified files are cached under `%LOCALAPPDATA%\Python-System-Utility-Toolkit\installers\installers-v1` and reused. Software installation no longer requires a flash drive. The Block Sites action still needs a drive containing your `hosts` file.
+Choose **Install Normal Apps** to prepare and run the general installers. Files come from this repository's [installers-v1 release](https://github.com/iantolentino/Python-System-Utility-Toolkit/releases/tag/installers-v1); `installers.json` identifies the assets and pins each file's SHA256. The bundle is copied from the supplied source release with identical filenames and checksums. Verified files are cached under `%LOCALAPPDATA%\Python-System-Utility-Toolkit\installers\installers-v1` and reused. Software installation no longer requires a flash drive. The Block Sites action automatically detects a drive containing your `hosts` file when clicked.
 
 Normal Setup uses Microsoft's [current Teams bootstrapper](https://learn.microsoft.com/en-us/microsoftteams/teams-client-bulk-install) for supported Teams installation, rather than executing the release's older Squirrel installer. Microsoft Office uses its supplied interactive bootstrapper; complete its setup window when prompted. Office activation and app sign-in remain separate from installation.
 
@@ -42,7 +42,9 @@ CNG installation verifies Sydney's timezone before installing either app. A time
 
 ## Window and progress log
 
-The window starts maximized and is resizable. Press **F11** or use **Full Screen** to toggle borderless fullscreen; **Esc** exits borderless fullscreen.
+The window starts maximized and is resizable. Setup actions and the output log use the full window width. Scroll the action area with its scrollbar or mouse wheel to reach all utilities; the output log stays visible. **Retry Last Task** is above the log. Press **F11** or use **Full Screen** to toggle borderless fullscreen; **Esc** exits borderless fullscreen.
+
+Both categories include matching **Check / Sync Time**, **Windows Update**, and **Download AMD Drivers** action tiles. Clock check synchronizes time without changing the selected timezone. Windows Update opens its Windows Settings page so you can check for updates. The AMD action downloads the supplied `26.8.1` minimal installer from `drivers.amd.com` to the running user's `Downloads` folder, verifies its Windows digital signature, and reports the saved path in the log. It does not run the installer automatically. Download or verification failures enable retry and open [AMD's official driver support page](https://www.amd.com/en/support/download/drivers.html), where you can find Ryzen chipset/Radeon drivers and the auto-detect tool.
 
 The output log shows timestamps, download percentages, checksum/signature verification, the current installer, command output, failures, and restart requirements. Success messages are green and errors are red. The status line shows the current step and elapsed time. Installer and policy tasks run in a background worker while the log remains responsive; another action is blocked until the running job finishes.
 

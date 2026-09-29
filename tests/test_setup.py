@@ -1,5 +1,4 @@
 import hashlib
-import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +10,18 @@ import setup_service as setup
 
 
 class InstallerTests(unittest.TestCase):
+    def test_amd_download_uses_support_referrer_only_for_amd_host(self):
+        for url, referrer in (("https://drivers.amd.com/test.exe", "https://www.amd.com/en/support/download/drivers.html"), ("https://example.com/test.exe", None)):
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
+                response = Mock(headers={"Content-Length": "9"})
+                response.read.side_effect = [b"installer", b""]
+                with patch.object(installer_store.urllib.request, "urlopen") as open_url:
+                    open_url.return_value.__enter__.return_value = response
+                    destination = Path(directory) / "test.exe"
+                    installer_store._download_once(url, destination)
+                self.assertEqual(open_url.call_args.args[0].get_header("Referer"), referrer)
+                self.assertEqual(destination.read_bytes(), b"installer")
+
     def test_transient_download_retries_then_succeeds(self):
         with patch.object(installer_store, "_download_once", side_effect=[installer_store.InstallerStoreError("network"), None]) as download, patch.object(installer_store.time, "sleep"):
             installer_store._download("https://example.com/test.exe", Path("test.exe"), Mock())

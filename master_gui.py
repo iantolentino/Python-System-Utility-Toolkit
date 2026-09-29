@@ -4,16 +4,18 @@ import webbrowser
 import winreg
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-import sys
 import shutil
 import queue
 import threading
 import time
 from datetime import datetime
-from setup_service import install_normal, install_cng, set_sydney_timezone
+from pathlib import Path
+from setup_service import install_normal, install_cng, set_sydney_timezone, download_signed
 from clock_service import check_system_time
 
 VERSION = "1.2.0"
+AMD_DOWNLOAD_URL = "https://drivers.amd.com/drivers/installer/26.10/whql/amd-software-adrenalin-edition-26.8.1-minimalsetup-260818_web.exe"
+AMD_SUPPORT_URL = "https://www.amd.com/en/support/download/drivers.html"
 
 class MasterScriptApp:
     def __init__(self, root):
@@ -40,7 +42,6 @@ class MasterScriptApp:
         self.colors = {
             "bg": "#f3f6fb",
             "surface": "#ffffff",
-            "surface_alt": "#eef3f9",
             "border": "#d9e2ef",
             "text": "#14213d",
             "muted": "#617089",
@@ -85,19 +86,8 @@ class MasterScriptApp:
         body = ttk.Frame(shell)
         body.pack(fill="both", expand=True)
 
-        sidebar = tk.Frame(
-            body,
-            bg=self.colors["surface"],
-            highlightbackground=self.colors["border"],
-            highlightthickness=1,
-            width=270
-        )
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
-        self._make_sidebar(sidebar)
-
         main = ttk.Frame(body)
-        main.pack(side="left", fill="both", expand=True, padx=(16, 0))
+        main.pack(fill="both", expand=True)
 
         categories = ttk.Frame(main)
         categories.pack(fill="x", pady=(0, 8))
@@ -110,12 +100,31 @@ class MasterScriptApp:
         self.category_note = ttk.Label(main, text="Install the general apps from the installers-v1 release.", style="Subtitle.TLabel")
         self.category_note.pack(anchor="w", pady=(0, 8))
 
-        action_grid = ttk.Frame(main)
-        action_grid.pack(fill="x")
+        action_area = ttk.Frame(main)
+        action_area.pack(fill="x")
+        self.action_canvas = tk.Canvas(action_area, bg=self.colors["bg"], height=350,
+                                       highlightthickness=0)
+        action_scroll = ttk.Scrollbar(action_area, orient="vertical", command=self.action_canvas.yview)
+        action_scroll.pack(side="right", fill="y")
+        self.action_canvas.pack(side="left", fill="x", expand=True)
+        self.action_canvas.configure(yscrollcommand=action_scroll.set)
+        action_grid = ttk.Frame(self.action_canvas)
+        action_window = self.action_canvas.create_window((0, 0), window=action_grid, anchor="nw")
+        action_grid.bind("<Configure>", lambda event: self.action_canvas.configure(
+            scrollregion=self.action_canvas.bbox("all")))
+        self.action_canvas.bind("<Configure>", lambda event: self.action_canvas.itemconfigure(
+            action_window, width=event.width))
+        self.root.bind("<MouseWheel>", self.scroll_actions, add="+")
+        self.root.bind("<Configure>", self.resize_action_area, add="+")
         self.action_grid = action_grid
+        self.common_actions = [
+            ("\ue895", "Check / Sync Time", "Check and sync the clock while keeping the current timezone.", self.check_sync_time, "#0284c7"),
+            ("\ue777", "Windows Update", "Open Windows Settings directly to Windows Update.", self.open_windows_update, "#2563eb"),
+            ("\ue896", "Download AMD Drivers", "Download the AMD installer; open AMD support if it fails.", self.download_amd_drivers, "#c2410c"),
+        ]
 
         actions = [
-            ("\ue8a5", "Block Sites", "Replace the hosts file from the detected flash drive.", self.block_sites, "#2563eb"),
+            ("\ue8a5", "Block Sites", "Detect a flash drive and replace the hosts file from it.", self.block_sites, "#2563eb"),
             ("\ue7ba", "Disable Hotspot", "Apply Windows policy to hide mobile hotspot sharing.", self.disable_hotspot, "#0f766e"),
             ("\ue88e", "Disable USB Storage", "Turn off USB mass storage access through USBSTOR.", self.disable_usb, "#7c3aed"),
             ("\ue7e8", "High Performance", "Set AC power profile and prevent idle sleep.", self.set_power_plan, "#d97706"),
@@ -140,6 +149,11 @@ class MasterScriptApp:
         tk.Label(log_header, text="Output Log", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 12, "bold")).pack(side="left")
         ttk.Button(log_header, text="Clear", style="Ghost.TButton", command=self.clear_log).pack(side="right")
         ttk.Button(log_header, text="Full Screen (F11)", style="Ghost.TButton", command=self.toggle_fullscreen).pack(side="right", padx=8)
+        log_controls = ttk.Frame(log_frame)
+        log_controls.pack(fill="x", padx=14, pady=(0, 8))
+        self.retry_button = ttk.Button(log_controls, text="Retry Last Task", style="Ghost.TButton",
+                                       command=self.retry_last_task, state="disabled")
+        self.retry_button.pack(side="left")
         self.status = tk.StringVar(value="Ready")
         self.status_label = tk.Label(log_frame, textvariable=self.status, bg=self.colors["surface"],
                                     fg=self.colors["primary"], font=("Segoe UI", 10, "bold"), anchor="w")
@@ -170,9 +184,43 @@ class MasterScriptApp:
     def render_actions(self, actions):
         for child in self.action_grid.winfo_children():
             child.destroy()
-        for index, action in enumerate(actions):
+        for index, action in enumerate(self.common_actions + actions):
             self._make_action_tile(self.action_grid, *action).grid(row=index // 3, column=index % 3,
                                                                   sticky="nsew", padx=6, pady=6)
+        self.action_canvas.yview_moveto(0)
+
+    def scroll_actions(self, event):
+        widget = event.widget
+        while widget is not None:
+            if widget == self.action_canvas:
+                self.action_canvas.yview_scroll(-int(event.delta / 120), "units")
+                return "break"
+            widget = getattr(widget, "master", None)
+
+    def resize_action_area(self, event):
+        if event.widget == self.root:
+            self.action_canvas.configure(height=max(180, min(420, event.height - 500)))
+
+    def check_sync_time(self):
+        self.start_job("Clock check", check_system_time)
+
+    def open_windows_update(self):
+        os.startfile("ms-settings:windowsupdate")
+        self.log_message("Windows Update settings opened. Check for updates in that window.")
+
+    def download_amd_drivers(self):
+        def download(log):
+            destination = Path.home() / "Downloads" / AMD_DOWNLOAD_URL.rsplit("/", 1)[-1]
+            try:
+                log("Downloading the AMD driver installer...")
+                download_signed(AMD_DOWNLOAD_URL, destination, log)
+            except Exception:
+                log("Opening AMD support to choose a driver or download its auto-detect tool.")
+                self.events.put(("amd_support", None))
+                raise
+            log(f"SUCCESS: AMD installer downloaded and signature verified: {destination}")
+            log("Open the downloaded installer when ready to update this PC's AMD drivers.")
+        self.start_job("AMD driver download", download)
 
     def select_category(self, category):
         if self.busy:
@@ -232,7 +280,13 @@ class MasterScriptApp:
                     if self.track_log_errors and ("ERROR" in value or "Failed" in value or "failed" in value or value.startswith("Error")):
                         self.job_failed = True
                     self.log_message(value)
-                else:
+                elif kind == "amd_support":
+                    try:
+                        if not webbrowser.open(AMD_SUPPORT_URL):
+                            self.log_message(f"Open AMD support in your browser: {AMD_SUPPORT_URL}")
+                    except Exception as exc:
+                        self.log_message(f"ERROR: Could not open AMD support: {exc}. Visit {AMD_SUPPORT_URL}")
+                elif kind == "done":
                     self.busy = False
                     self.progress.stop()
                     elapsed = int(time.monotonic() - self.job_started)
@@ -252,42 +306,6 @@ class MasterScriptApp:
             name, operation, track_log_errors = self.last_job
             self.log_message(f"Retry requested: {name}")
             self.start_job(name, operation, track_log_errors)
-
-    def _make_sidebar(self, parent):
-        tk.Label(parent, text="Provisioning", bg=self.colors["surface"], fg=self.colors["text"], font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(20, 2))
-        tk.Label(
-            parent,
-            text="Prepare this workstation with one-click administrative tasks.",
-            bg=self.colors["surface"],
-            fg=self.colors["muted"],
-            font=("Segoe UI", 9),
-            wraplength=220,
-            justify="left"
-        ).pack(anchor="w", padx=18, pady=(0, 18))
-
-        status_card = tk.Frame(parent, bg=self.colors["surface_alt"], highlightbackground=self.colors["border"], highlightthickness=1)
-        status_card.pack(fill="x", padx=14, pady=(0, 14))
-        tk.Label(status_card, text="\ue7f4", bg=self.colors["surface_alt"], fg=self.colors["primary"], font=("Segoe MDL2 Assets", 22)).pack(anchor="w", padx=14, pady=(12, 0))
-        tk.Label(status_card, text="Flash Drive", bg=self.colors["surface_alt"], fg=self.colors["text"], font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=14, pady=(6, 2))
-        self.drive_label = tk.Label(status_card, text="No flash drive detected", bg=self.colors["surface_alt"], fg=self.colors["danger"], font=("Segoe UI", 9, "bold"))
-        self.drive_label.pack(anchor="w", padx=14, pady=(0, 12))
-
-        ttk.Button(parent, text="Check / Sync Time", style="Primary.TButton", command=lambda: self.start_job("Clock check", check_system_time)).pack(fill="x", padx=14, pady=(0, 10))
-        self.retry_button = ttk.Button(parent, text="Retry Last Task", style="Primary.TButton", command=self.retry_last_task, state="disabled")
-        self.retry_button.pack(fill="x", padx=14, pady=(0, 10))
-        ttk.Button(parent, text="Detect Flash Drive", style="Ghost.TButton", command=self.detect_flash_drive).pack(fill="x", padx=14, pady=(0, 10))
-        ttk.Button(parent, text="Exit", style="Ghost.TButton", command=self.root.quit).pack(fill="x", padx=14)
-
-        tk.Frame(parent, bg=self.colors["border"], height=1).pack(fill="x", padx=14, pady=18)
-        tk.Label(
-            parent,
-            text="Run as Administrator for registry, system policy, and installer tasks.",
-            bg=self.colors["surface"],
-            fg=self.colors["muted"],
-            font=("Segoe UI", 9),
-            wraplength=220,
-            justify="left"
-        ).pack(anchor="w", padx=18)
 
     def _make_action_tile(self, parent, icon, title, description, command, accent):
         action = command
@@ -365,18 +383,16 @@ class MasterScriptApp:
             drive_path = f"{letter}:\\"
             if os.path.exists(os.path.join(drive_path, "hosts")):
                 self.flashdrive = drive_path
-                self.drive_label.config(text=f"Detected: {drive_path}", foreground="green")
                 self.log_message(f"Flash drive found at {drive_path}")
-                return
+                return True
         self.flashdrive = None
-        self.drive_label.config(text="No flash drive detected", foreground="red")
         self.log_message("Error: No flash drive with 'hosts' found.")
         messagebox.showerror("Error", "Could not find a flash drive with a 'hosts' file.")
+        return False
 
     def require_flashdrive(self):
         if not self.flashdrive:
-            messagebox.showwarning("Flash Drive Not Found", "Please detect the flash drive first.")
-            return False
+            return self.detect_flash_drive()
         return True
 
     def run_cmd(self, cmd):
@@ -394,19 +410,6 @@ class MasterScriptApp:
         except Exception as e:
             self.log_message(f"ERROR: {e}")
             return False
-
-    import subprocess
-
-    def run_installer_as_admin(path, args=""):
-        try:
-            cmd = [
-                "powershell",
-                "-Command",
-                f'Start-Process -FilePath "{path}" -ArgumentList \'{args}\' -Verb RunAs'
-            ]
-            subprocess.run(cmd, shell=True)
-        except Exception as e:
-            print(f"Failed to run {path}: {e}")
 
     def block_sites(self):
         if not self.require_flashdrive():

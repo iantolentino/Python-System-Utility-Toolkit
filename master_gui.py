@@ -12,8 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from setup_service import install_normal, install_cng, set_sydney_timezone, download_signed
 from clock_service import check_system_time
+import cleanup_service
+import state_service
 
 VERSION = "1.2.0"
+HEARTBEAT_SECONDS = 20
 AMD_DOWNLOAD_URL = "https://drivers.amd.com/drivers/installer/26.10/whql/amd-software-adrenalin-edition-26.8.1-minimalsetup-260818_web.exe"
 AMD_SUPPORT_URL = "https://www.amd.com/en/support/download/drivers.html"
 
@@ -39,6 +42,8 @@ class MasterScriptApp:
         self.current_step = "Ready"
         self.last_job = None
         self.track_log_errors = False
+        self.last_output = time.monotonic()
+        self.job_sequence = 0
         self.colors = {
             "bg": "#f3f6fb",
             "surface": "#ffffff",
@@ -121,6 +126,7 @@ class MasterScriptApp:
             ("\ue895", "Check / Sync Time", "Check and sync the clock while keeping the current timezone.", self.check_sync_time, "#0284c7"),
             ("\ue777", "Windows Update", "Open Windows Settings directly to Windows Update.", self.open_windows_update, "#2563eb"),
             ("\ue896", "Download AMD Drivers", "Download the AMD installer; open AMD support if it fails.", self.download_amd_drivers, "#c2410c"),
+            ("\ue721", "Scan Current State", "Report installed applications and already-applied configurations.", self.scan_state, "#0f766e"),
         ]
 
         actions = [
@@ -154,6 +160,12 @@ class MasterScriptApp:
         self.retry_button = ttk.Button(log_controls, text="Retry Last Task", style="Ghost.TButton",
                                        command=self.retry_last_task, state="disabled")
         self.retry_button.pack(side="left")
+        self.clean_button = ttk.Button(log_controls, text="Clean Up and Quit", style="Ghost.TButton",
+                                       command=self.clean_up_and_quit)
+        self.clean_button.pack(side="right")
+        self.quit_button = ttk.Button(log_controls, text="Quit", style="Ghost.TButton",
+                                      command=self.quit_app)
+        self.quit_button.pack(side="right", padx=8)
         self.status = tk.StringVar(value="Ready")
         self.status_label = tk.Label(log_frame, textvariable=self.status, bg=self.colors["surface"],
                                     fg=self.colors["primary"], font=("Segoe UI", 10, "bold"), anchor="w")
@@ -203,6 +215,9 @@ class MasterScriptApp:
 
     def check_sync_time(self):
         self.start_job("Clock check", check_system_time)
+
+    def scan_state(self):
+        self.start_job("System state scan", state_service.log_system_state)
 
     def open_windows_update(self):
         os.startfile("ms-settings:windowsupdate")
@@ -270,12 +285,43 @@ class MasterScriptApp:
             finally:
                 self.events.put(("done", success))
 
+        self.job_sequence += 1
+        sequence = self.job_sequence
         threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=self.watch_job, args=(name, sequence), daemon=True).start()
+
+    def heartbeat_message(self, name):
+        """Return a keep-alive line when the job has been quiet for too long."""
+        if time.monotonic() - self.last_output < HEARTBEAT_SECONDS:
+            return None
+        elapsed = int(time.monotonic() - self.job_started)
+        return (f"Still working on {name} ({elapsed}s elapsed). "
+                "Some installers stay quiet while they run.")
+
+    def watch_job(self, name, sequence):
+        """Log a heartbeat during quiet phases so the window never looks hung.
+
+        Long installers (Office especially) can run for minutes without writing
+        anything, which is when Windows starts showing the window as not responding.
+        The sequence stops a watchdog left over from a finished job from reporting
+        the wrong task name.
+        """
+        while self.busy and sequence == self.job_sequence:
+            time.sleep(5)
+            if not self.busy or sequence != self.job_sequence:
+                return
+            message = self.heartbeat_message(name)
+            if message:
+                self.events.put(("log", message))
 
     def process_events(self):
+        # Bound the work per tick so a burst of installer output can never block
+        # the window long enough for Windows to mark it as not responding.
+        processed = 0
         try:
-            while True:
+            while processed < 200:
                 kind, value = self.events.get_nowait()
+                processed += 1
                 if kind == "log":
                     if self.track_log_errors and ("ERROR" in value or "Failed" in value or "failed" in value or value.startswith("Error")):
                         self.job_failed = True
@@ -363,7 +409,47 @@ class MasterScriptApp:
         self.log.delete("1.0", "end")
         self.log.config(state="disabled")
 
+    def quit_app(self):
+        self.root.quit()
+
+    def clean_up_and_quit(self):
+        if self.busy:
+            self.log_message("A task is running. Wait for it to finish before cleaning up toolkit files.")
+            return
+        files = cleanup_service.toolkit_files()
+        folders = cleanup_service.deferred_folders()
+        targets = files + folders
+        count, size = cleanup_service.describe(targets)
+        if count == 0:
+            self.log_message("No toolkit files were found to clean up.")
+            self.root.after(600, self.quit_app)
+            return
+        listing = "\n".join(str(path) for path in targets[:10])
+        if len(targets) > 10:
+            listing += "\n..."
+        if not messagebox.askyesno(
+            "Clean Up Toolkit Files",
+            "Remove the toolkit's own files?\n\n"
+            f"{count} item(s), about {size / 1048576:.1f} MB:\n\n{listing}\n\n"
+            "Installed applications, registry policies, the timezone, the power plan "
+            "and the hosts file are kept. The window closes afterwards."
+        ):
+            self.log_message("Clean up cancelled. No toolkit files were removed.")
+            return
+        self.log_message("Cleaning up toolkit files...")
+        removed, freed = cleanup_service.clean_toolkit_files(self.log_message)
+        self.log_message(f"SUCCESS: Removed {removed} item(s) and freed {freed / 1048576:.1f} MB.")
+        try:
+            cleanup_service.schedule_folder_removal(folders, self.log_message)
+        except OSError as exc:
+            self.log_message(f"ERROR: Could not schedule folder removal: {exc}")
+            self.log_message("Delete these folders manually: " + ", ".join(str(path) for path in folders))
+        if not folders:
+            self.log_message("Installed applications and configuration changes were kept.")
+        self.root.after(900, self.quit_app)
+
     def log_message(self, msg):
+        self.last_output = time.monotonic()
         if threading.current_thread() is not threading.main_thread():
             self.events.put(("log", msg))
             return

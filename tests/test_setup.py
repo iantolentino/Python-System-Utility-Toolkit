@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -134,18 +135,18 @@ class SetupTests(unittest.TestCase):
 
     def test_installer_failure_cannot_report_success(self):
         log = Mock()
-        with patch.object(setup.subprocess, "run", return_value=subprocess.CompletedProcess(["installer"], 1, "", "failed")):
+        with patch.object(setup, "run_streaming", return_value=subprocess.CompletedProcess(["installer"], 1, "failed", "")):
             with self.assertRaises(RuntimeError):
                 setup.run_process(["installer"], log)
 
     def test_busy_windows_installer_retries_without_reporting_success_early(self):
-        with patch.object(setup.subprocess, "run", side_effect=[subprocess.CompletedProcess(["msiexec"], 1618, "", ""), subprocess.CompletedProcess(["msiexec"], 0, "", "")]) as run, patch.object(setup.time, "sleep"):
+        with patch.object(setup, "run_streaming", side_effect=[subprocess.CompletedProcess(["msiexec"], 1618, "", ""), subprocess.CompletedProcess(["msiexec"], 0, "", "")]) as run, patch.object(setup.time, "sleep"):
             setup.run_process(["msiexec"], Mock())
         self.assertEqual(run.call_count, 2)
 
     def test_reboot_code_reports_restart_without_automatic_reboot(self):
         log = Mock()
-        with patch.object(setup.subprocess, "run", return_value=subprocess.CompletedProcess(["msiexec"], 3010, "", "")):
+        with patch.object(setup, "run_streaming", return_value=subprocess.CompletedProcess(["msiexec"], 3010, "", "")):
             setup.run_process(["msiexec"], log, success_codes=(0, 3010))
         self.assertIn("Restart required", log.call_args.args[0])
 
@@ -162,10 +163,45 @@ class SetupTests(unittest.TestCase):
 
     def test_normal_setup_continues_and_reports_partial_failure(self):
         entries = [{"name": "Test One", "local_path": "one.exe"}, {"name": "Test Two", "local_path": "two.exe"}]
-        with patch.object(setup, "require_admin"), patch.object(setup, "load_catalog", return_value={}), patch.object(setup, "prepare_installers", return_value=entries), patch.object(setup, "run_process", side_effect=[RuntimeError("installer failed"), Mock()]) as run:
+        report = [{"name": "Test One", "installed": False}, {"name": "Test Two", "installed": False}]
+        with patch.object(setup, "require_admin"), patch.object(setup, "load_catalog", return_value={}), patch.object(setup, "prepare_installers", return_value=entries), patch.object(setup.state_service, "log_application_report", return_value=report), patch.object(setup, "run_process", side_effect=[RuntimeError("installer failed"), Mock()]) as run:
             with self.assertRaisesRegex(RuntimeError, "Test One"):
                 setup.install_normal(Mock())
         self.assertEqual(run.call_count, 2)
+
+    def test_normal_setup_skips_applications_already_installed(self):
+        entries = [{"name": "Test One", "local_path": "one.exe"}, {"name": "Test Two", "local_path": "two.exe"}]
+        report = [{"name": "Test One", "installed": True, "display": "Test One 1.0", "version": "1.0"},
+                  {"name": "Test Two", "installed": False, "display": None, "version": None}]
+        log = Mock()
+        with patch.object(setup, "require_admin"), patch.object(setup, "load_catalog", return_value={}), patch.object(setup, "prepare_installers", return_value=entries), patch.object(setup.state_service, "log_application_report", return_value=report), patch.object(setup, "run_process", return_value=Mock()) as run:
+            setup.install_normal(log)
+        self.assertEqual(run.call_count, 1)
+        self.assertTrue(any("already installed" in str(call.args[0]) for call in log.call_args_list))
+
+
+class StreamingTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows required")
+    def test_output_lines_are_streamed_to_the_log_as_they_arrive(self):
+        lines = []
+        result = setup.run_streaming([os.environ["ComSpec"], "/d", "/c", "echo alpha& echo beta"],
+                                     lines.append, timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("alpha", lines)
+        self.assertIn("beta", lines)
+        self.assertIn("alpha", result.stdout)
+
+    @unittest.skipUnless(os.name == "nt", "Windows required")
+    def test_failed_command_preserves_the_exit_code(self):
+        result = setup.run_streaming([os.environ["ComSpec"], "/d", "/c", "exit 3"], lambda message: None, timeout=30)
+        self.assertEqual(result.returncode, 3)
+
+    @unittest.skipUnless(os.name == "nt", "Windows required")
+    def test_output_is_logged_before_the_process_exits(self):
+        seen = []
+        setup.run_streaming([os.environ["ComSpec"], "/d", "/c", "echo first& ping -n 3 127.0.0.1 >nul"],
+                            seen.append, timeout=30)
+        self.assertIn("first", seen)
 
 
 if __name__ == "__main__":

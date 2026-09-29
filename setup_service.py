@@ -9,6 +9,7 @@ import time
 
 from installer_store import _download, load_catalog, prepare_installers
 from clock_service import check_system_time
+import state_service
 
 SYDNEY_TIMEZONE = "AUS Eastern Standard Time"
 FRONT_URL = "https://dl.frontapp.com/win32/FrontSetupMachine.msi"
@@ -22,18 +23,51 @@ def require_admin():
         raise RuntimeError("Run install_and_run.bat and accept its Windows administrator prompt before setting up this workstation.")
 
 
+def run_streaming(command, log, timeout):
+    """Run a command and log each output line as it arrives.
+
+    Streaming keeps the log and the window moving during long installers instead of
+    staying silent until the process exits, which is what makes Windows mark the
+    window as not responding.
+    """
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    started = time.monotonic()
+    lines = []
+    try:
+        if process.stdout is not None:
+            for raw in process.stdout:
+                line = raw.rstrip()
+                if line:
+                    lines.append(line)
+                    log(line)
+                if time.monotonic() - started > timeout:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(command, timeout)
+        process.wait(timeout=timeout)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        if process.stdout is not None:
+            process.stdout.close()
+    return subprocess.CompletedProcess(command, process.returncode, "\n".join(lines), "")
+
+
 def run_process(command, log, success_codes=(0,), timeout=1800):
-    """Wait for the actual installer and preserve diagnostics in the output log."""
+    """Wait for the actual installer while streaming its output to the log."""
     for attempt in range(1, 4):
-        result = subprocess.run(command, capture_output=True, text=True, errors="replace",
-                                timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        result = run_streaming(command, log, timeout)
         if result.returncode != 1618 or attempt == 3:
             break
         log(f"Windows Installer is busy. Retry {attempt + 1}/3 in 10s...")
         time.sleep(10)
-    for output in (result.stdout, result.stderr):
-        if output and output.strip():
-            log(output.strip())
     if result.returncode not in success_codes:
         raise RuntimeError(f"{Path(command[0]).name} failed (exit code {result.returncode}).")
     if result.returncode in (1641, 3010):
@@ -68,9 +102,16 @@ def install_normal(log):
     catalog = load_catalog(RESOURCE_DIR / "installers.json")
     log("Preparing Normal Setup packages from installers-v1...")
     entries = prepare_installers(catalog, CACHE_DIR, log)
+    report = state_service.log_application_report(log, [entry["name"] for entry in entries])
+    already_installed = {entry["name"] for entry in report if entry["installed"]}
+    if already_installed:
+        log("Already present, so their installers are skipped: " + ", ".join(sorted(already_installed)))
     failures = []
     for index, entry in enumerate(entries, 1):
         name = entry["name"]
+        if name in already_installed:
+            log(f"SUCCESS: {name} is already installed; skipping {index}/{len(entries)}.")
+            continue
         log(f"Installing {index}/{len(entries)}: {name}...")
         if name == "Microsoft Office":
             log("Microsoft Office uses an interactive installer. Complete its setup window to continue.")

@@ -1,5 +1,6 @@
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 try:
@@ -29,9 +30,9 @@ class GuiTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(self.app.busy)
 
-    def test_normal_setup_layout_is_resizable_with_twelve_actions(self):
+    def test_normal_setup_layout_is_resizable_with_thirteen_actions(self):
         self.assertEqual(self.root.resizable(), (1, 1))
-        self.assertEqual(len(self.app.action_grid.winfo_children()), 12)
+        self.assertEqual(len(self.app.action_grid.winfo_children()), 13)
         self.assertIn("Ready", self.app.log.get("1.0", "end"))
 
     def test_cng_selection_applies_timezone_and_shows_app_buttons(self):
@@ -40,7 +41,7 @@ class GuiTests(unittest.TestCase):
             self.finish_job()
         timezone.assert_called_once()
         self.assertEqual(self.app.category, "CNG Setup")
-        self.assertEqual(len(self.app.action_grid.winfo_children()), 6)
+        self.assertEqual(len(self.app.action_grid.winfo_children()), 7)
         self.assertIn("Completed", self.app.status.get())
 
     def test_background_failure_is_visible_and_marks_job_failed(self):
@@ -80,6 +81,55 @@ class GuiTests(unittest.TestCase):
         self.finish_job()
         self.clock.assert_called_once()
         self.assertIn("Completed", self.app.status.get())
+
+    def test_scan_state_runs_the_state_report(self):
+        with patch.object(master_gui.state_service, "log_system_state") as scan:
+            self.app.scan_state()
+            self.finish_job()
+        scan.assert_called_once()
+        self.assertIn("Completed", self.app.status.get())
+
+    def test_heartbeat_only_fires_after_a_quiet_period(self):
+        self.app.job_started = time.monotonic() - 45
+        self.app.last_output = time.monotonic()
+        self.assertIsNone(self.app.heartbeat_message("Install"))
+        self.app.last_output = time.monotonic() - master_gui.HEARTBEAT_SECONDS - 1
+        message = self.app.heartbeat_message("Install")
+        self.assertIn("Still working on Install", message)
+        self.assertIn("45s elapsed", message)
+
+    def test_event_pump_is_bounded_per_tick(self):
+        for index in range(500):
+            self.app.events.put(("log", f"queued {index}"))
+        self.app.process_events()
+        self.assertGreater(self.app.events.qsize(), 0)
+        self.assertIn("queued 0", self.app.log.get("1.0", "end"))
+
+    def test_stale_watchdog_stops_when_a_newer_job_started(self):
+        self.app.busy = True
+        self.app.job_sequence = 5
+        with patch.object(master_gui.time, "sleep"):
+            self.app.watch_job("Finished job", 3)
+        self.assertEqual(self.app.events.qsize(), 0)
+
+    def test_current_watchdog_emits_exactly_one_heartbeat_per_quiet_window(self):
+        self.app.busy = True
+        self.app.job_sequence = 7
+        self.app.job_started = time.monotonic() - 50
+        self.app.last_output = time.monotonic() - 50
+        calls = {"count": 0}
+
+        def fake_sleep(_seconds):
+            calls["count"] += 1
+            if calls["count"] >= 2:
+                self.app.busy = False
+
+        with patch.object(master_gui.time, "sleep", side_effect=fake_sleep):
+            self.app.watch_job("Install", 7)
+        kind, value = self.app.events.get_nowait()
+        self.assertEqual(kind, "log")
+        self.assertIn("Still working on Install", value)
+        self.assertEqual(self.app.events.qsize(), 0)
 
     def test_windows_update_opens_settings_uri(self):
         with patch.object(master_gui.os, "startfile") as start:
@@ -135,6 +185,69 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(self.root.attributes("-fullscreen"))
         self.app.toggle_fullscreen()
         self.assertFalse(self.root.attributes("-fullscreen"))
+
+    def test_log_controls_expose_quit_and_cleanup_buttons(self):
+        self.assertEqual(self.app.quit_button.cget("text"), "Quit")
+        self.assertEqual(self.app.clean_button.cget("text"), "Clean Up and Quit")
+
+    def test_quit_app_stops_the_mainloop(self):
+        with patch.object(self.root, "quit") as quit_:
+            self.app.quit_app()
+        quit_.assert_called_once()
+
+    def test_clean_up_reports_when_nothing_to_remove(self):
+        with patch.object(master_gui.cleanup_service, "toolkit_files", return_value=[]), \
+             patch.object(master_gui.cleanup_service, "deferred_folders", return_value=[]), \
+             patch.object(master_gui.messagebox, "askyesno") as ask, \
+             patch.object(master_gui.cleanup_service, "clean_toolkit_files") as clean, \
+             patch.object(self.app, "quit_app") as quit_app, \
+             patch.object(self.root, "after") as after:
+            self.app.clean_up_and_quit()
+        ask.assert_not_called()
+        clean.assert_not_called()
+        self.assertIn("No toolkit files", self.app.log.get("1.0", "end"))
+        after.assert_called_once_with(600, quit_app)
+
+    def test_clean_up_cancelled_keeps_everything(self):
+        target = Path("C:/fake/Python-System-Utility-Toolkit")
+        with patch.object(master_gui.cleanup_service, "toolkit_files", return_value=[target]), \
+             patch.object(master_gui.cleanup_service, "deferred_folders", return_value=[]), \
+             patch.object(master_gui.cleanup_service, "describe", return_value=(1, 1024)), \
+             patch.object(master_gui.messagebox, "askyesno", return_value=False), \
+             patch.object(master_gui.cleanup_service, "clean_toolkit_files") as clean, \
+             patch.object(master_gui.cleanup_service, "schedule_folder_removal") as schedule, \
+             patch.object(self.app, "quit_app") as quit_app, \
+             patch.object(self.root, "after") as after:
+            self.app.clean_up_and_quit()
+        clean.assert_not_called()
+        schedule.assert_not_called()
+        quit_app.assert_not_called()
+        after.assert_not_called()
+        self.assertIn("cancelled", self.app.log.get("1.0", "end"))
+
+    def test_clean_up_removes_files_schedules_folder_then_quits(self):
+        target = Path("C:/fake/Python-System-Utility-Toolkit")
+        with patch.object(master_gui.cleanup_service, "toolkit_files", return_value=[target]), \
+             patch.object(master_gui.cleanup_service, "deferred_folders", return_value=[target]), \
+             patch.object(master_gui.cleanup_service, "describe", return_value=(1, 1048576)), \
+             patch.object(master_gui.messagebox, "askyesno", return_value=True), \
+             patch.object(master_gui.cleanup_service, "clean_toolkit_files", return_value=(1, 1048576)) as clean, \
+             patch.object(master_gui.cleanup_service, "schedule_folder_removal") as schedule, \
+             patch.object(self.app, "quit_app") as quit_app, \
+             patch.object(self.root, "after") as after:
+            self.app.clean_up_and_quit()
+        clean.assert_called_once()
+        schedule.assert_called_once_with([target], self.app.log_message)
+        self.assertIn("SUCCESS", self.app.log.get("1.0", "end"))
+        after.assert_called_once_with(900, quit_app)
+
+    def test_clean_up_blocks_while_a_task_is_running(self):
+        self.app.busy = True
+        with patch.object(master_gui.cleanup_service, "toolkit_files") as files:
+            self.app.clean_up_and_quit()
+        self.app.busy = False
+        files.assert_not_called()
+        self.assertIn("Wait for it to finish", self.app.log.get("1.0", "end"))
 
 
 if __name__ == "__main__":

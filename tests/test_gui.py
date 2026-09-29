@@ -1,3 +1,4 @@
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -164,10 +165,13 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(str(self.app.retry_button.cget("state")), "normal")
 
     def test_block_sites_detects_drive_before_copying(self):
-        with patch.object(master_gui.os.path, "exists", side_effect=lambda path: path == "E:\\hosts"), patch.object(self.app, "run_cmd", return_value=True) as run:
+        with patch.object(master_gui.os.path, "exists",
+                          side_effect=lambda path: path == "E:\\hosts"), \
+             patch.object(self.app, "_hosts_entries", return_value=["0.0.0.0 ads.example"]), \
+             patch.object(self.app, "run_cmd", return_value=True) as run:
             self.app.block_sites()
         self.assertEqual(self.app.flashdrive, "E:\\")
-        self.assertIn('"E:\\hosts"', run.call_args.args[0])
+        self.assertTrue(any('"E:\\hosts"' in call.args[0] for call in run.call_args_list))
 
     def test_block_sites_without_drive_reports_error_and_does_not_copy(self):
         with patch.object(master_gui.os.path, "exists", return_value=False), patch.object(master_gui.messagebox, "showerror") as error, patch.object(self.app, "run_cmd") as run:
@@ -175,6 +179,83 @@ class GuiTests(unittest.TestCase):
         error.assert_called_once()
         run.assert_not_called()
         self.assertIsNone(self.app.flashdrive)
+
+    def test_block_sites_backs_up_clears_readonly_copies_and_flushes_dns(self):
+        with patch.object(self.app, "require_flashdrive", return_value=True), \
+             patch.object(self.app, "_hosts_entries", return_value=["0.0.0.0 ads.example"]), \
+             patch.object(self.app, "_file_digest", return_value="same"), \
+             patch.object(master_gui.os.path, "exists", return_value=True), \
+             patch.object(master_gui.shutil, "copy2") as copy2, \
+             patch.object(self.app, "run_cmd", return_value=True) as run:
+            self.app.flashdrive = "E:\\"
+            self.app.block_sites()
+        copy2.assert_called_once()
+        log = self.app.log.get("1.0", "end")
+        self.assertIn("Backed up the current hosts file", log)
+        self.assertIn("Sites blocked successfully", log)
+        self.assertIn("DNS cache was flushed", log)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertTrue(any(command.startswith("attrib -R") for command in commands))
+        self.assertTrue(any(command.startswith("copy /Y") for command in commands))
+        self.assertEqual(commands[-1], "ipconfig /flushdns")
+
+    def test_block_sites_refuses_a_hosts_file_with_no_entries(self):
+        with patch.object(self.app, "require_flashdrive", return_value=True), \
+             patch.object(self.app, "_hosts_entries", return_value=[]), \
+             patch.object(master_gui.messagebox, "showerror") as error, \
+             patch.object(self.app, "run_cmd") as run:
+            self.app.flashdrive = "E:\\"
+            self.app.block_sites()
+        error.assert_called_once()
+        run.assert_not_called()
+        self.assertIn("no blocked site entries", self.app.log.get("1.0", "end"))
+
+    def test_block_sites_reports_failure_when_the_copy_fails(self):
+        with patch.object(self.app, "require_flashdrive", return_value=True), \
+             patch.object(self.app, "_hosts_entries", return_value=["0.0.0.0 ads.example"]), \
+             patch.object(master_gui.os.path, "exists", return_value=True), \
+             patch.object(master_gui.shutil, "copy2"), \
+             patch.object(self.app, "run_cmd", side_effect=lambda command: not command.startswith("copy /Y")) as run:
+            self.app.flashdrive = "E:\\"
+            self.app.block_sites()
+        log = self.app.log.get("1.0", "end")
+        self.assertIn("Could not replace the hosts file", log)
+        self.assertNotIn("Sites blocked successfully", log)
+        self.assertNotIn("ipconfig /flushdns", [call.args[0] for call in run.call_args_list])
+
+    def test_block_sites_reports_a_mismatch_and_skips_the_dns_flush(self):
+        digests = iter(["aaa", "bbb"])
+        with patch.object(self.app, "require_flashdrive", return_value=True), \
+             patch.object(self.app, "_hosts_entries", return_value=["0.0.0.0 ads.example"]), \
+             patch.object(self.app, "_file_digest", side_effect=lambda path: next(digests)), \
+             patch.object(master_gui.os.path, "exists", return_value=True), \
+             patch.object(master_gui.shutil, "copy2"), \
+             patch.object(self.app, "run_cmd", return_value=True) as run:
+            self.app.flashdrive = "E:\\"
+            self.app.block_sites()
+        self.assertIn("did not match after copying", self.app.log.get("1.0", "end"))
+        self.assertNotIn("ipconfig /flushdns", [call.args[0] for call in run.call_args_list])
+
+    def test_block_sites_aborts_when_the_backup_fails(self):
+        with patch.object(self.app, "require_flashdrive", return_value=True), \
+             patch.object(self.app, "_hosts_entries", return_value=["0.0.0.0 ads"]), \
+             patch.object(master_gui.os.path, "exists", return_value=True), \
+             patch.object(master_gui.shutil, "copy2", side_effect=OSError("denied")), \
+             patch.object(master_gui.messagebox, "showerror") as error, \
+             patch.object(self.app, "run_cmd") as run:
+            self.app.flashdrive = "E:\\"
+            self.app.block_sites()
+        error.assert_called_once()
+        run.assert_not_called()
+        self.assertIn("Could not back up", self.app.log.get("1.0", "end"))
+
+    def test_hosts_entries_ignores_comments_and_blank_lines(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hosts = Path(folder) / "hosts"
+            hosts.write_text("# comment\n\n0.0.0.0 ads.example\n  127.0.0.1 tracker.example\n",
+                             encoding="utf-8")
+            self.assertEqual(len(self.app._hosts_entries(str(hosts))), 2)
+            self.assertEqual(self.app._hosts_entries(str(Path(folder) / "missing")), [])
 
     def test_clear_log_and_fullscreen_toggle(self):
         self.app.log_message("SUCCESS: test")

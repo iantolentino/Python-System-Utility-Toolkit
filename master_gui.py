@@ -1,4 +1,5 @@
 import os
+import hashlib
 import subprocess
 import webbrowser
 import winreg
@@ -17,6 +18,7 @@ import state_service
 
 VERSION = "1.2.0"
 HEARTBEAT_SECONDS = 20
+HOSTS_PATH = r"C:\Windows\System32\drivers\etc\hosts"
 AMD_DOWNLOAD_URL = "https://drivers.amd.com/drivers/installer/26.10/whql/amd-software-adrenalin-edition-26.8.1-minimalsetup-260818_web.exe"
 AMD_SUPPORT_URL = "https://www.amd.com/en/support/download/drivers.html"
 
@@ -497,14 +499,59 @@ class MasterScriptApp:
             self.log_message(f"ERROR: {e}")
             return False
 
+    @staticmethod
+    def _hosts_entries(path):
+        """Return the usable (non-comment, non-empty) lines of a hosts file."""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                return [line.strip() for line in handle
+                        if line.strip() and not line.lstrip().startswith("#")]
+        except OSError:
+            return []
+
+    @staticmethod
+    def _file_digest(path):
+        try:
+            with open(path, "rb") as handle:
+                return hashlib.sha256(handle.read()).hexdigest()
+        except OSError:
+            return None
+
     def block_sites(self):
         if not self.require_flashdrive():
             return
         src = os.path.join(self.flashdrive, "hosts")
-        dest = r"C:\Windows\System32\drivers\etc\hosts"
-        self.log_message("Blocking sites...")
-        if self.run_cmd(f'copy /Y "{src}" "{dest}"'):
-            self.log_message("Sites blocked successfully.")
+        dest = HOSTS_PATH
+        entries = self._hosts_entries(src)
+        if not entries:
+            message = (f"{src} has no blocked site entries, so the current hosts file "
+                       "was left unchanged.")
+            self.log_message(f"ERROR: {message}")
+            messagebox.showerror("Block Sites", message)
+            return
+        self.log_message(f"Blocking sites from {src} ({len(entries)} entries)...")
+        if os.path.exists(dest):
+            backup = f"{dest}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            try:
+                shutil.copy2(dest, backup)
+            except OSError as exc:
+                message = f"Could not back up the current hosts file: {exc}"
+                self.log_message(f"ERROR: {message}")
+                messagebox.showerror("Block Sites", f"{message}\n\nNothing was changed.")
+                return
+            self.log_message(f"Backed up the current hosts file to {backup}")
+            # A read-only hosts file makes copy fail with "Access is denied".
+            self.run_cmd(f'attrib -R "{dest}"')
+        if not self.run_cmd(f'copy /Y "{src}" "{dest}"'):
+            self.log_message("ERROR: Could not replace the hosts file. Sites were not blocked.")
+            return
+        if self._file_digest(src) != self._file_digest(dest):
+            self.log_message("ERROR: The hosts file did not match after copying. Sites may not be blocked.")
+            return
+        # DNS lookups already resolved stay cached, so the block would not apply
+        # to recently visited sites until the cache is flushed.
+        self.run_cmd("ipconfig /flushdns")
+        self.log_message(f"Sites blocked successfully ({len(entries)} entries) and the DNS cache was flushed.")
 
     def disable_hotspot(self):
         try:

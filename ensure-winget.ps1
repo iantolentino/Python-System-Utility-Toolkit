@@ -15,6 +15,7 @@ function Invoke-WithRetry {
     }
 }
 
+$downloadDirectory = $null
 try {
     Write-Host 'Installing Microsoft App Installer (WinGet) and its dependencies...'
     $release = Invoke-WithRetry { Invoke-RestMethod 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -TimeoutSec 30 }
@@ -55,4 +56,9 @@ try {
 } catch {
     Write-Error "Could not prepare WinGet: $_"
     exit 1
+} finally {
+    # The bundle and its expanded dependencies used to stay in %TEMP% forever.
+    if ($downloadDirectory) {
+        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

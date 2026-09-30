@@ -257,6 +257,55 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(len(self.app._hosts_entries(str(hosts))), 2)
             self.assertEqual(self.app._hosts_entries(str(Path(folder) / "missing")), [])
 
+    def test_action_area_fits_its_content_instead_of_always_scrolling(self):
+        self.app.action_grid.update_idletasks()
+        required = self.app.action_grid.winfo_reqheight()
+        self.assertGreater(required, 1)
+        self.app.resize_action_area(Mock(widget=self.app.root,
+                                         height=required + master_gui.ACTION_AREA_RESERVED))
+        self.assertEqual(int(self.app.action_canvas.cget("height")), required)
+
+    def test_action_area_clamps_to_the_room_available(self):
+        self.app.action_grid.update_idletasks()
+        self.app.resize_action_area(Mock(widget=self.app.root,
+                                         height=master_gui.ACTION_AREA_RESERVED + 200))
+        self.assertEqual(int(self.app.action_canvas.cget("height")), 200)
+        self.app.resize_action_area(Mock(widget=self.app.root,
+                                         height=master_gui.ACTION_AREA_RESERVED - 400))
+        self.assertEqual(int(self.app.action_canvas.cget("height")), 180)
+
+    def test_action_area_ignores_events_from_other_widgets(self):
+        self.app.action_canvas.configure(height=333)
+        self.app.resize_action_area(Mock(widget=self.app.log, height=900))
+        self.assertEqual(int(self.app.action_canvas.cget("height")), 333)
+
+    def test_clear_teams_profile_prompts_then_runs_in_the_background(self):
+        with patch.object(master_gui.messagebox, "askyesno", return_value=True), \
+             patch.object(self.app, "start_job") as start:
+            self.app.clear_teams_profile()
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[0], "Clear Teams Profile")
+
+    def test_clear_teams_profile_cancel_starts_no_job(self):
+        with patch.object(master_gui.messagebox, "askyesno", return_value=False), \
+             patch.object(self.app, "start_job") as start:
+            self.app.clear_teams_profile()
+        start.assert_not_called()
+        self.assertIn("cancelled", self.app.log.get("1.0", "end"))
+
+    def test_remove_teams_profile_data_clears_the_package_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            package = Path(folder) / "Packages" / "MSTeams_8wekyb3d8bbwe"
+            (package / "nested").mkdir(parents=True)
+            (package / "token.bin").write_text("x", encoding="utf-8")
+            (package / "nested" / "deep.bin").write_text("y", encoding="utf-8")
+            with patch.object(self.app, "run_cmd", return_value=True):
+                self.app.remove_teams_profile_data(folder)
+            self.assertEqual(list(package.iterdir()), [])
+            log = self.app.log.get("1.0", "end")
+            self.assertIn("Items deleted: 2", log)
+            self.assertIn("Not found, skipping", log)
+
     def test_clear_log_and_fullscreen_toggle(self):
         self.app.log_message("SUCCESS: test")
         self.assertTrue(self.app.log.tag_ranges("success"))

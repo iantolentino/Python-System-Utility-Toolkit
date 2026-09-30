@@ -88,41 +88,47 @@ function Install-Direct {
     $architecture = Get-Architecture
     $directory = Join-Path $env:TEMP ('toolkit-prerequisite-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $directory | Out-Null
-    $expectedHash = $null
-    if ($Name -eq 'git') {
-        Write-Host 'Using the official Git for Windows installer fallback...'
-        if ($architecture -eq 'x86') {
-            # Last official 32-bit Git for Windows release.
-            $releaseUrl = 'https://api.github.com/repos/git-for-windows/git/releases/tags/v2.48.1.windows.1'
-            $pattern = '^Git-.*-32-bit\.exe$'
+    try {
+        $expectedHash = $null
+        if ($Name -eq 'git') {
+            Write-Host 'Using the official Git for Windows installer fallback...'
+            if ($architecture -eq 'x86') {
+                # Last official 32-bit Git for Windows release.
+                $releaseUrl = 'https://api.github.com/repos/git-for-windows/git/releases/tags/v2.48.1.windows.1'
+                $pattern = '^Git-.*-32-bit\.exe$'
+            } else {
+                $releaseUrl = 'https://api.github.com/repos/git-for-windows/git/releases/latest'
+                $pattern = if ($architecture -eq 'arm64') { '^Git-.*-arm64\.exe$' } else { '^Git-.*-64-bit\.exe$' }
+            }
+            $release = Invoke-DownloadRetry { Invoke-RestMethod -Uri $releaseUrl -TimeoutSec 30 }
+            $asset = $release.assets | Where-Object name -Match $pattern | Select-Object -First 1
+            if (-not $asset) { throw "No official Git installer found for $architecture." }
+            $url = $asset.browser_download_url
+            if ($asset.digest -match '^sha256:([a-fA-F0-9]{64})$') { $expectedHash = $Matches[1] }
+            $arguments = '/VERYSILENT /NORESTART /SP- /SUPPRESSMSGBOXES /DIR="' + $env:ProgramFiles + '\Git"'
         } else {
-            $releaseUrl = 'https://api.github.com/repos/git-for-windows/git/releases/latest'
-            $pattern = if ($architecture -eq 'arm64') { '^Git-.*-arm64\.exe$' } else { '^Git-.*-64-bit\.exe$' }
+            Write-Host 'Using the official Python installer fallback (includes Tkinter)...'
+            $suffix = switch ($architecture) { 'x64' { '-amd64' } 'arm64' { '-arm64' } 'x86' { '' } }
+            $url = "https://www.python.org/ftp/python/3.12.10/python-3.12.10$suffix.exe"
+            $arguments = '/quiet InstallAllUsers=1 Include_tcltk=1 Include_pip=1 Include_test=0 PrependPath=1 /norestart TargetDir="' + $env:ProgramFiles + '\Python312"'
         }
-        $release = Invoke-DownloadRetry { Invoke-RestMethod -Uri $releaseUrl -TimeoutSec 30 }
-        $asset = $release.assets | Where-Object name -Match $pattern | Select-Object -First 1
-        if (-not $asset) { throw "No official Git installer found for $architecture." }
-        $url = $asset.browser_download_url
-        if ($asset.digest -match '^sha256:([a-fA-F0-9]{64})$') { $expectedHash = $Matches[1] }
-        $arguments = '/VERYSILENT /NORESTART /SP- /SUPPRESSMSGBOXES /DIR="' + $env:ProgramFiles + '\Git"'
-    } else {
-        Write-Host 'Using the official Python installer fallback (includes Tkinter)...'
-        $suffix = switch ($architecture) { 'x64' { '-amd64' } 'arm64' { '-arm64' } 'x86' { '' } }
-        $url = "https://www.python.org/ftp/python/3.12.10/python-3.12.10$suffix.exe"
-        $arguments = '/quiet InstallAllUsers=1 Include_tcltk=1 Include_pip=1 Include_test=0 PrependPath=1 /norestart TargetDir="' + $env:ProgramFiles + '\Python312"'
+        $installer = Join-Path $directory 'installer.exe'
+        Write-Host "Downloading $url"
+        Invoke-DownloadRetry { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer -TimeoutSec 300 }
+        if ($expectedHash -and (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw 'Installer checksum mismatch; installation stopped.'
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne 'Valid') { throw "Installer signature is not valid: $($signature.Status). Check Windows date/time and retry." }
+        Write-Host "Verified installer signature: $($signature.SignerCertificate.Subject)"
+        # Start-Process -Wait returns once the installer exits, so the file is unlocked here.
+        $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+        if ($process.ExitCode -notin 0, 1641, 3010) { throw "$Name installer failed with exit code $($process.ExitCode)." }
+        if ($process.ExitCode -in 1641, 3010) { Write-Host '[INFO] Restart required to complete installation.' }
+    } finally {
+        # Without this the installer (60 MB for Git) stayed in %TEMP% forever.
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
     }
-    $installer = Join-Path $directory 'installer.exe'
-    Write-Host "Downloading $url"
-    Invoke-DownloadRetry { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer -TimeoutSec 300 }
-    if ($expectedHash -and (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
-        throw 'Installer checksum mismatch; installation stopped.'
-    }
-    $signature = Get-AuthenticodeSignature -LiteralPath $installer
-    if ($signature.Status -ne 'Valid') { throw "Installer signature is not valid: $($signature.Status). Check Windows date/time and retry." }
-    Write-Host "Verified installer signature: $($signature.SignerCertificate.Subject)"
-    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-    if ($process.ExitCode -notin 0, 1641, 3010) { throw "$Name installer failed with exit code $($process.ExitCode)." }
-    if ($process.ExitCode -in 1641, 3010) { Write-Host '[INFO] Restart required to complete installation.' }
 }
 
 function Install-Prerequisite {

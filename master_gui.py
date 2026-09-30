@@ -19,6 +19,8 @@ import state_service
 VERSION = "1.2.0"
 HEARTBEAT_SECONDS = 20
 HOSTS_PATH = r"C:\Windows\System32\drivers\etc\hosts"
+# Window space taken by the header, category bar, progress log, and controls.
+ACTION_AREA_RESERVED = 500
 AMD_DOWNLOAD_URL = "https://drivers.amd.com/drivers/installer/26.10/whql/amd-software-adrenalin-edition-26.8.1-minimalsetup-260818_web.exe"
 AMD_SUPPORT_URL = "https://www.amd.com/en/support/download/drivers.html"
 
@@ -202,6 +204,9 @@ class MasterScriptApp:
             self._make_action_tile(self.action_grid, *action).grid(row=index // 3, column=index % 3,
                                                                   sticky="nsew", padx=6, pady=6)
         self.action_canvas.yview_moveto(0)
+        # Categories hold different numbers of tiles, so re-fit after switching.
+        self.action_grid.update_idletasks()
+        self.fit_action_area()
 
     def scroll_actions(self, event):
         widget = event.widget
@@ -211,9 +216,19 @@ class MasterScriptApp:
                 return "break"
             widget = getattr(widget, "master", None)
 
+    def fit_action_area(self, window_height=None):
+        """Use exactly the height the tiles need, within the room available."""
+        if window_height is None:
+            window_height = self.root.winfo_height()
+        if window_height <= 1:
+            return  # window is not mapped yet; the first <Configure> fits it
+        required = self.action_grid.winfo_reqheight()
+        available = max(180, window_height - ACTION_AREA_RESERVED)
+        self.action_canvas.configure(height=min(required, available) if required > 1 else available)
+
     def resize_action_area(self, event):
         if event.widget == self.root:
-            self.action_canvas.configure(height=max(180, min(420, event.height - 500)))
+            self.fit_action_area(event.height)
 
     def check_sync_time(self):
         self.start_job("Clock check", check_system_time)
@@ -671,6 +686,8 @@ class MasterScriptApp:
         self.log_message("Restart Outlook to apply changes.")
 
     def clear_teams_profile(self):
+        # The prompt stays on the main thread; the deletion below is slow enough
+        # to freeze the window, so it runs as a background job.
         if not messagebox.askyesno(
             "Clear Teams Profile",
             "This will close Microsoft Teams and delete stored Teams login data for the current Windows user. Continue?"
@@ -684,6 +701,10 @@ class MasterScriptApp:
             messagebox.showerror("Error", "Could not locate the current user's Local AppData folder.")
             return
 
+        self.start_job("Clear Teams Profile",
+                       lambda log: self.remove_teams_profile_data(local_app_data))
+
+    def remove_teams_profile_data(self, local_app_data):
         self.log_message("Closing Microsoft Teams...")
         for process_name in ("ms-teams.exe", "Teams.exe", "msteams.exe"):
             self.run_cmd(f'taskkill /F /IM "{process_name}"')
